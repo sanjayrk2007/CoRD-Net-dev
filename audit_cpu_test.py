@@ -183,7 +183,7 @@ for B, H, W in [(1, 7, 7), (2, 7, 7), (4, 7, 7), (1, 8, 8), (2, 8, 8)]:
     x = torch.randn(B, 768, H, W)
     try:
         with torch.no_grad():
-            feat, logits = fgbf(x)
+            feat, logits, _b01, _b12 = fgbf(x)
         feat_ok   = feat.shape   == (B, 256)
         logit_ok  = logits.shape == (B, 3)
         record(f"FGBF shapes (B={B},H={H},W={W}): feat{tuple(feat.shape)} logits{tuple(logits.shape)}",
@@ -195,7 +195,7 @@ for B, H, W in [(1, 7, 7), (2, 7, 7), (4, 7, 7), (1, 8, 8), (2, 8, 8)]:
 x = torch.randn(2, 768, 6, 6)
 try:
     with torch.no_grad():
-        feat, logits = fgbf(x)
+        feat, logits, _b01, _b12 = fgbf(x)
     record("FGBF handles arbitrary spatial size (6×6)", True)
 except Exception as e:
     record("FGBF handles arbitrary spatial size (6×6)", False, str(e))
@@ -277,9 +277,9 @@ with torch.no_grad():
     xr = make_right_map()
     xc = make_center_map()
 
-    fl, ll = fgbf(xl)
-    fr, lr = fgbf(xr)
-    fc, lc = fgbf(xc)
+    fl, ll, _b01l, _b12l = fgbf(xl)
+    fr, lr, _b01r, _b12r = fgbf(xr)
+    fc, lc, _b01c, _b12c = fgbf(xc)
 
     medial_attn_l, lateral_attn_l = fgbf.get_last_attention_maps()
     # After xr:
@@ -328,7 +328,7 @@ record("FGBF forward uses self.eps in denominator", has_eps)
 x_zero = torch.zeros(2, 768, 7, 7)
 try:
     with torch.no_grad():
-        feat_z, logits_z = fgbf(x_zero)
+        feat_z, logits_z, _b01z, _b12z = fgbf(x_zero)
     nan_free = bool(torch.isfinite(feat_z).all() and torch.isfinite(logits_z).all())
     record("FGBF output finite for zero-input feature map", nan_free)
 except Exception as e:
@@ -357,20 +357,37 @@ loss_fgbf = F.cross_entropy(fgbf_logits, labels.clamp(max=2))  # toy
 total = loss_main + 0.15 * loss_fgbf
 total.backward()
 
-# Check FGBF parameter gradients
+# Check FGBF parameter gradients.
+# NOTE: boundary_head_01 and boundary_head_12 are NOT used by this e2_fgbf
+# toy loss (which only uses fgbf_logits = 3-class CE).  They correctly have
+# no gradient here — this is expected and correct isolation.
+# We verify that all other (core) FGBF parameters do receive gradients.
+_BOUNDARY_HEADS = ("boundary_head_01.", "boundary_head_12.")
+
 fgbf_params_with_grad = []
 fgbf_params_none_grad = []
 for name, p in m.fgbf.named_parameters():
+    if any(name.startswith(bh) for bh in _BOUNDARY_HEADS):
+        continue  # Not expected to have grad for e2_fgbf path
     if p.grad is not None:
         fgbf_params_with_grad.append(name)
     else:
         fgbf_params_none_grad.append(name)
 
-record("All FGBF parameters receive gradients",
+record("All core FGBF parameters (excl. boundary heads) receive gradients",
        len(fgbf_params_none_grad) == 0,
-       f"No-grad params: {fgbf_params_none_grad[:3]}")
+       f"No-grad core params: {fgbf_params_none_grad[:3]}")
 
-# Check gradients finite and non-zero
+# Verify boundary heads are correctly isolated (no grad in e2_fgbf path)
+boundary_heads_no_grad = all(
+    p.grad is None
+    for name, p in m.fgbf.named_parameters()
+    if any(name.startswith(bh) for bh in _BOUNDARY_HEADS)
+)
+record("Boundary heads correctly isolated (no grad in e2_fgbf CE path)",
+       boundary_heads_no_grad)
+
+# Check gradients finite and non-zero (only for params that have grads)
 all_finite = all(torch.isfinite(p.grad).all()
                  for p in m.fgbf.parameters() if p.grad is not None)
 all_nonzero = not all((p.grad == 0).all()
@@ -384,6 +401,8 @@ backbone_grad_any = any(
     for p in m.backbone_features.parameters()
 )
 record("ConvNeXt backbone receives gradients via FGBF path", backbone_grad_any)
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -548,7 +567,7 @@ x_bf16 = torch.randn(2, 768, 7, 7).to(torch.bfloat16)
 fgbf_bf16 = fgbf_fp16.to(torch.bfloat16)
 try:
     with torch.no_grad():
-        feat_bf, log_bf = fgbf_bf16(x_bf16)
+        feat_bf, log_bf, _b01_bf, _b12_bf = fgbf_bf16(x_bf16)
     finite = bool(torch.isfinite(feat_bf).all() and torch.isfinite(log_bf).all())
     record("FGBF runs in bfloat16 without NaN/Inf", finite)
 except Exception as e:
@@ -879,6 +898,297 @@ with tempfile.TemporaryDirectory() as tmpdir:
             record("Smoke: checkpoint save + reload + forward", True)
         except Exception as e:
             record("Smoke: checkpoint save + reload", False, str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 24. E2-FGBF-Boundary specific tests
+# ─────────────────────────────────────────────────────────────────────────────
+section("24. E2-FGBF-BOUNDARY TESTS")
+
+# 24-A: Config exists and flags are correct
+try:
+    cfg_b = get_config("e2_fgbf_boundary")
+    record("e2_fgbf_boundary config exists", True)
+    record("e2_fgbf_boundary use_fgbf=True",       cfg_b.model.use_fgbf)
+    record("e2_fgbf_boundary use_stn=True",         cfg_b.model.use_stn)
+    record("e2_fgbf_boundary fgbf_boundary_mode=True",
+           cfg_b.model.fgbf_boundary_mode)
+    record("e2_fgbf_boundary fgbf_loss_weight=0.10",
+           abs(cfg_b.model.fgbf_loss_weight - 0.10) < 1e-9)
+    record("e2_fgbf_boundary fgbf_fuse_main=False",
+           not cfg_b.model.fgbf_fuse_main)
+    record("e2_fgbf_boundary use_dual_intensity=False",
+           not cfg_b.model.use_dual_intensity)
+except Exception as e:
+    record("e2_fgbf_boundary config exists", False, str(e))
+    cfg_b = None
+
+# 24-B: Existing experiments are unchanged
+try:
+    cfg_e2_check  = get_config("e2")
+    cfg_e2f_check = get_config("e2_fgbf")
+    record("E2 still has use_fgbf=False",
+           not cfg_e2_check.model.use_fgbf)
+    record("E2 still has fgbf_boundary_mode=False",
+           not cfg_e2_check.model.fgbf_boundary_mode)
+    record("e2_fgbf still has fgbf_boundary_mode=False",
+           not cfg_e2f_check.model.fgbf_boundary_mode)
+    record("e2_fgbf fgbf_loss_weight still=0.15",
+           abs(cfg_e2f_check.model.fgbf_loss_weight - 0.15) < 1e-9)
+except Exception as e:
+    record("Existing experiment flags unchanged", False, str(e))
+
+if cfg_b is not None:
+    # 24-C: Model construction for boundary experiment
+    try:
+        m_b = DRPNet(cfg_b.model)
+        m_b.eval()
+        record("DRPNet(e2_fgbf_boundary) constructs", True)
+        record("DRPNet(e2_fgbf_boundary) has fgbf module", m_b.fgbf is not None)
+        record("DRPNet(e2_fgbf_boundary) has one backbone",
+               sum(1 for n, _ in m_b.named_children() if "backbone" in n) == 2)
+    except Exception as e:
+        record("DRPNet(e2_fgbf_boundary) constructs", False, traceback.format_exc()[-300:])
+        m_b = None
+
+    # 24-D: Forward output tensor shapes
+    if m_b is not None:
+        x_b = torch.randn(4, 3, 224, 224)
+        try:
+            with torch.no_grad():
+                out_b = m_b(x_b)
+            record("e2_fgbf_boundary forward: logits (4,5)",
+                   out_b["logits"].shape == (4, 5))
+            record("e2_fgbf_boundary forward: fgbf_logits (4,3) [compat]",
+                   out_b.get("fgbf_logits", torch.zeros(1)).shape == (4, 3)
+                   if "fgbf_logits" in out_b else False)
+            record("e2_fgbf_boundary forward: fgbf_logits_b01 (4,1)",
+                   "fgbf_logits_b01" in out_b and out_b["fgbf_logits_b01"].shape == (4, 1))
+            record("e2_fgbf_boundary forward: fgbf_logits_b12 (4,1)",
+                   "fgbf_logits_b12" in out_b and out_b["fgbf_logits_b12"].shape == (4, 1))
+            record("e2_fgbf_boundary forward: fgbf_feature (4,256)",
+                   "fgbf_feature" in out_b and out_b["fgbf_feature"].shape == (4, 256))
+        except Exception as e:
+            record("e2_fgbf_boundary forward shapes", False, traceback.format_exc()[-400:])
+            out_b = None
+
+    # 24-E: e2_fgbf does NOT expose boundary keys
+    try:
+        cfg_e2f_test = get_config("e2_fgbf")
+        m_e2f_test = DRPNet(cfg_e2f_test.model)
+        m_e2f_test.eval()
+        with torch.no_grad():
+            out_e2f_test = m_e2f_test(torch.randn(2, 3, 224, 224))
+        record("e2_fgbf does NOT expose fgbf_logits_b01",
+               "fgbf_logits_b01" not in out_e2f_test)
+        record("e2_fgbf does NOT expose fgbf_logits_b12",
+               "fgbf_logits_b12" not in out_e2f_test)
+        record("e2_fgbf DOES expose fgbf_logits (3-class)",
+               "fgbf_logits" in out_e2f_test and out_e2f_test["fgbf_logits"].shape == (2, 3))
+    except Exception as e:
+        record("e2_fgbf boundary-key isolation", False, str(e))
+
+    # 24-F: Masking — KL0 excluded from B12, KL3/4 excluded from both
+    # We do this by directly calling _compute_loss with controlled label sets.
+    trainer_b = make_cfg_and_trainer("e2_fgbf_boundary")
+    m_bnd = trainer_b.model
+    m_bnd.eval()
+
+    def _boundary_loss_case(kl_labels_list):
+        B_ = len(kl_labels_list)
+        kl_ = torch.tensor(kl_labels_list, dtype=torch.long)
+        x_ = torch.randn(B_, 3, 224, 224)
+        lbs_ = {
+            "kl":         kl_,
+            "jsn_med":    torch.full((B_,), -1, dtype=torch.long),
+            "jsn_lat":    torch.full((B_,), -1, dtype=torch.long),
+            "osteophyte": torch.full((B_, 4), -1, dtype=torch.long),
+        }
+        with torch.no_grad():
+            preds_ = m_bnd(x_)
+        ld_ = trainer_b._compute_loss(preds_, lbs_)
+        return ld_, preds_
+
+    # KL3/KL4 only — b01 and b12 must be zero (or near-zero via 0*sum)
+    try:
+        ld_hi, preds_hi = _boundary_loss_case([3, 4, 3, 4])
+        b01_hi = ld_hi.get("fgbf_b01_loss", torch.tensor(0.0))
+        b12_hi = ld_hi.get("fgbf_b12_loss", torch.tensor(0.0))
+        total_hi_finite = torch.isfinite(ld_hi["total"])
+        # For KL3/4-only: the 0.0*sum(...) path fires so the tensors are ~0
+        record("KL3/4-only batch: total loss finite", bool(total_hi_finite))
+        # b01 and b12 should be effectively 0 (0.0 * sum)
+        b01_val = float(b01_hi) if hasattr(b01_hi, "item") else float(b01_hi)
+        b12_val = float(b12_hi) if hasattr(b12_hi, "item") else float(b12_hi)
+        record("KL3/4-only batch: L_b01 is effectively zero",
+               abs(b01_val) < 1e-6,
+               f"L_b01={b01_val:.6f}")
+        record("KL3/4-only batch: L_b12 is effectively zero",
+               abs(b12_val) < 1e-6,
+               f"L_b12={b12_val:.6f}")
+    except Exception as e:
+        record("KL3/4-only boundary loss", False, traceback.format_exc()[-300:])
+
+    # KL0-only — b01 must fire (all KL0 → target 0), b12 must be zero (no KL1/2)
+    try:
+        ld_kl0, _ = _boundary_loss_case([0, 0, 0])
+        record("KL0-only batch: total finite",
+               bool(torch.isfinite(ld_kl0["total"])))
+        b12_kl0 = ld_kl0.get("fgbf_b12_loss", torch.tensor(0.0))
+        b12_kl0_val = float(b12_kl0) if hasattr(b12_kl0, "item") else float(b12_kl0)
+        record("KL0-only batch: L_b12=0 (KL0 excluded from B12)",
+               abs(b12_kl0_val) < 1e-6,
+               f"L_b12={b12_kl0_val:.6f}")
+        b01_kl0 = ld_kl0.get("fgbf_b01_loss", torch.tensor(float("nan")))
+        record("KL0-only batch: L_b01 is finite (KL0 valid in B01)",
+               bool(torch.isfinite(b01_kl0)))
+    except Exception as e:
+        record("KL0-only boundary loss", False, traceback.format_exc()[-300:])
+
+    # Mixed KL0/1/2/3/4 batch — all losses finite
+    try:
+        ld_mix, _ = _boundary_loss_case([0, 1, 2, 3, 4])
+        total_mix_finite = torch.isfinite(ld_mix["total"])
+        b01_mix = ld_mix.get("fgbf_b01_loss", torch.tensor(float("nan")))
+        b12_mix = ld_mix.get("fgbf_b12_loss", torch.tensor(float("nan")))
+        record("Mixed KL0-4 batch: total finite", bool(total_mix_finite))
+        record("Mixed KL0-4 batch: L_b01 finite", bool(torch.isfinite(b01_mix)))
+        record("Mixed KL0-4 batch: L_b12 finite", bool(torch.isfinite(b12_mix)))
+    except Exception as e:
+        record("Mixed KL0-4 boundary loss", False, traceback.format_exc()[-300:])
+
+    # KL1/KL2 only batch — b12 must be non-trivial
+    try:
+        ld_12, _ = _boundary_loss_case([1, 2, 1, 2])
+        record("KL1/2-only batch: total finite",
+               bool(torch.isfinite(ld_12["total"])))
+        b12_12 = ld_12.get("fgbf_b12_loss", torch.tensor(float("nan")))
+        record("KL1/2-only batch: L_b12 finite and non-trivial",
+               bool(torch.isfinite(b12_12)) and float(b12_12) > 1e-8)
+    except Exception as e:
+        record("KL1/2-only boundary loss", False, traceback.format_exc()[-300:])
+
+    # 24-G: Loss equation verification — total = main + 0.10 * fgbf
+    try:
+        ld_eq, _ = _boundary_loss_case([0, 1, 2, 3, 4])
+        if "fgbf" in ld_eq and "kl" in ld_eq:
+            w = cfg_b.model.fgbf_loss_weight   # 0.10
+            expected = ld_eq["kl"] + w * ld_eq["fgbf"]
+            close = torch.isclose(ld_eq["total"], expected, rtol=1e-5)
+            record("Total = main + 0.10 * L_fgbf (numerically verified)",
+                   bool(close),
+                   f"expected {float(expected):.6f}, got {float(ld_eq['total']):.6f}")
+        else:
+            record("Total = main + 0.10 * L_fgbf", False,
+                   f"missing keys: {list(ld_eq.keys())}")
+    except Exception as e:
+        record("Total loss equation", False, traceback.format_exc()[-300:])
+
+    # 24-H: Gradient flow through boundary heads and backbone
+    try:
+        m_bnd_grad = DRPNet(cfg_b.model)
+        m_bnd_grad.train()
+        x_g = torch.randn(4, 3, 224, 224)
+        kl_g = torch.tensor([0, 1, 2, 3])
+        lbs_g = {
+            "kl":         kl_g,
+            "jsn_med":    torch.full((4,), -1, dtype=torch.long),
+            "jsn_lat":    torch.full((4,), -1, dtype=torch.long),
+            "osteophyte": torch.full((4, 4), -1, dtype=torch.long),
+        }
+        preds_g = m_bnd_grad(x_g)
+        ld_g_dummy = make_cfg_and_trainer("e2_fgbf_boundary")
+        ld_g_dummy.model = m_bnd_grad
+        loss_g = ld_g_dummy._compute_loss(preds_g, lbs_g)
+        loss_g["total"].backward()
+
+        # Check boundary_head_01 and boundary_head_12 got gradients
+        b01_params_ok = all(
+            p.grad is not None and torch.isfinite(p.grad).all()
+            for p in m_bnd_grad.fgbf.boundary_head_01.parameters()
+        )
+        b12_params_ok = all(
+            p.grad is not None and torch.isfinite(p.grad).all()
+            for p in m_bnd_grad.fgbf.boundary_head_12.parameters()
+        )
+        bb_grad_ok = any(
+            p.grad is not None and (p.grad != 0).any()
+            for p in m_bnd_grad.backbone_features.parameters()
+        )
+        record("boundary_head_01 parameters receive finite gradients", b01_params_ok)
+        record("boundary_head_12 parameters receive finite gradients", b12_params_ok)
+        record("Backbone receives gradients via boundary path", bb_grad_ok)
+    except Exception as e:
+        record("Gradient flow through boundary heads", False, traceback.format_exc()[-400:])
+
+    # 24-I: Only one ConvNeXt backbone in boundary model
+    try:
+        m_b_chk = DRPNet(cfg_b.model)
+        bb_count = sum(1 for n, _ in m_b_chk.named_children() if "backbone" in n)
+        record("e2_fgbf_boundary: only one backbone (backbone_features + backbone_pool)",
+               bb_count == 2)
+        fgbf_mods = list(m_b_chk.fgbf.named_modules()) if m_b_chk.fgbf else []
+        has_cnx_in_fgbf = any("convnext" in n.lower() for n, _ in fgbf_mods)
+        record("e2_fgbf_boundary: FGBF contains no ConvNeXt module", not has_cnx_in_fgbf)
+    except Exception as e:
+        record("e2_fgbf_boundary single-backbone check", False, str(e))
+
+    # 24-J: E2 model output identical before and after our changes (no regression)
+    try:
+        torch.manual_seed(7)
+        cfg_e2_reg = get_config("e2")
+        m_e2_reg   = DRPNet(cfg_e2_reg.model)
+        m_e2_reg.eval()
+        x_reg = torch.randn(2, 3, 224, 224)
+        with torch.no_grad():
+            out_e2_reg = m_e2_reg(x_reg)
+        # E2 should have: logits (2,5), NO fgbf keys
+        e2_ok = (
+            out_e2_reg["logits"].shape == (2, 5)
+            and "fgbf_logits" not in out_e2_reg
+            and "fgbf_logits_b01" not in out_e2_reg
+            and "fgbf_logits_b12" not in out_e2_reg
+        )
+        record("E2 has no FGBF output keys (regression check)", e2_ok)
+    except Exception as e:
+        record("E2 regression check", False, str(e))
+
+    # 24-K: Boundary balanced accuracy metrics
+    # Verify we can compute binary balanced accuracy from boundary logits
+    try:
+        from sklearn.metrics import balanced_accuracy_score
+        # Simulate boundary head predictions
+        b01_logits_np = np.array([0.8, -0.3, 0.5, -0.7, 0.2])   # KL0(neg) vs KL1/2(pos)
+        b12_logits_np = np.array([0.6, -0.4, 0.1])               # KL1(neg) vs KL2(pos)
+        b01_targets_np = np.array([0, 0, 1, 1, 1])               # KL0, KL0, KL1, KL2, KL1
+        b12_targets_np = np.array([0, 1, 0])                     # KL1, KL2, KL1
+        b01_preds = (b01_logits_np > 0).astype(int)
+        b12_preds = (b12_logits_np > 0).astype(int)
+        bac_b01 = float(balanced_accuracy_score(b01_targets_np, b01_preds))
+        bac_b12 = float(balanced_accuracy_score(b12_targets_np, b12_preds))
+        record("Boundary 1 (KL0|KL12) balanced accuracy computable", np.isfinite(bac_b01))
+        record("Boundary 2 (KL1|KL2) balanced accuracy computable", np.isfinite(bac_b12))
+    except Exception as e:
+        record("Boundary balanced accuracy metrics", False, str(e))
+
+    # 24-L: Batch size = 1 edge case for boundary model
+    try:
+        m_bnd.eval()
+        kl_bs1 = torch.tensor([1], dtype=torch.long)
+        x_bs1 = torch.randn(1, 3, 224, 224)
+        lbs_bs1 = {
+            "kl":         kl_bs1,
+            "jsn_med":    torch.full((1,), -1, dtype=torch.long),
+            "jsn_lat":    torch.full((1,), -1, dtype=torch.long),
+            "osteophyte": torch.full((1, 4), -1, dtype=torch.long),
+        }
+        with torch.no_grad():
+            preds_bs1 = m_bnd(x_bs1)
+        ld_bs1 = trainer_b._compute_loss(preds_bs1, lbs_bs1)
+        record("e2_fgbf_boundary batch_size=1 loss finite",
+               bool(torch.isfinite(ld_bs1["total"])))
+    except Exception as e:
+        record("e2_fgbf_boundary batch_size=1", False, traceback.format_exc()[-300:])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

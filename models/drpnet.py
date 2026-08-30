@@ -273,9 +273,23 @@ class DRPNet(nn.Module):
         fgbf_feature: Optional[torch.Tensor] = None
         fgbf_logits: Optional[torch.Tensor] = None
         if self.fgbf is not None:
-            fgbf_feature, fgbf_logits = self.fgbf(global_spatial)
-            out["fgbf_logits"] = fgbf_logits
-            out["fgbf_feature"] = fgbf_feature
+            # forward() now returns 4-tuple:
+            #   (boundary_feature (B,256),
+            #    low_grade_logits (B,3),    ← backward-compat 3-class head
+            #    boundary_logit_b01 (B,1),  ← new: KL0 vs KL1/KL2
+            #    boundary_logit_b12 (B,1))  ← new: KL1 vs KL2
+            fgbf_feature, fgbf_logits, fgbf_b01, fgbf_b12 = self.fgbf(global_spatial)
+
+            # Always populate the backward-compat 3-class key.
+            out["fgbf_logits"] = fgbf_logits    # (B, 3)
+            out["fgbf_feature"] = fgbf_feature  # (B, 256)
+
+            # Boundary logits are only surfaced when fgbf_boundary_mode is
+            # active (e2_fgbf_boundary).  e2_fgbf sees neither key and its
+            # _compute_loss path is therefore completely unchanged.
+            if getattr(self.cfg, "fgbf_boundary_mode", False):
+                out["fgbf_logits_b01"] = fgbf_b01  # (B, 1)
+                out["fgbf_logits_b12"] = fgbf_b12  # (B, 1)
 
             if want_debug_crops:
                 medial_attn, lateral_attn = self.fgbf.get_last_attention_maps()

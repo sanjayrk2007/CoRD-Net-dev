@@ -6,6 +6,26 @@ Fine-Grained Boundary-Aware Low-Grade Feature Module (FGBF).
 Auxiliary experimental module for CoRD-Net designed to enhance KL0/KL1/KL2
 discrimination without duplicate backbone passes or E4 compartment coupling.
 Reuses the shared ConvNeXt spatial feature map (B, 768, H, W).
+
+Boundary Head Variant (fgbf_boundary_mode=True)
+------------------------------------------------
+In addition to the original 3-class low_grade_head (kept for backward
+compatibility), two binary boundary heads are provided:
+
+  boundary_head_01: KL0 vs KL1/KL2   — logit (B, 1)
+  boundary_head_12: KL1 vs KL2        — logit (B, 1)
+
+KL0 is explicitly excluded from the KL1-vs-KL2 head (masking done in Trainer).
+KL3/KL4 are excluded from both boundary heads (masking done in Trainer).
+
+The forward() always returns a 4-tuple:
+    (boundary_feature, low_grade_logits, boundary_logit_b01, boundary_logit_b12)
+
+When use_fgbf=True but fgbf_boundary_mode=False (i.e., e2_fgbf), drpnet.py
+only populates fgbf_logits and fgbf_feature in the output dict.  The two
+boundary logit tensors are still produced by this module but are ignored in
+that code path — zero computational overhead on the backward graph because
+drpnet.py simply does not include them in the loss.
 """
 
 from __future__ import annotations
@@ -20,8 +40,12 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
     Lightweight Boundary-Aware Low-Grade Feature Module (FGBF).
 
     Maps backbone spatial feature maps (B, 768, H, W) to:
-      1. boundary_feature (B, 256): Fused global + local boundary representation.
-      2. low_grade_logits (B, 3): Refinement classification logits for [KL0, KL1, KL2].
+      1. boundary_feature    (B, 256): Fused global + local boundary representation.
+      2. low_grade_logits    (B, 3):   3-class refinement logits [KL0, KL1, KL2]
+                                        (kept for backward compatibility).
+      3. boundary_logit_b01  (B, 1):   Binary logit — KL0(0) vs KL1/KL2(1).
+      4. boundary_logit_b12  (B, 1):   Binary logit — KL1(0) vs KL2(1).
+                                        KL0 must be masked out in the caller.
 
     Parameters
     ----------
@@ -32,7 +56,8 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
     dropout:
         Dropout probability in projection and classifier heads (default: 0.1).
     eps:
-        Epsilon for numerical stability during weighted spatial pooling normalization (default: 1e-6).
+        Epsilon for numerical stability during weighted spatial pooling
+        normalization (default: 1e-6).
     """
 
     def __init__(
@@ -79,12 +104,35 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
             nn.Dropout(p=dropout),
         )
 
-        # 4. KL0/KL1/KL2 refinement classifier head
+        # 4a. Original 3-class refinement head — kept for backward compatibility.
+        #     Used by e2_fgbf (fgbf_boundary_mode=False).
+        #     Output: (B, 3) logits for [KL0, KL1, KL2].
         self.low_grade_head = nn.Sequential(
             nn.Linear(reduced_dim, 128),
             nn.GELU(),
             nn.Dropout(p=dropout),
             nn.Linear(128, 3),
+        )
+
+        # 4b. Binary boundary head 1: KL0(target=0) vs KL1/KL2(target=1).
+        #     All KL0/1/2 samples are valid for this head.
+        #     Output: (B, 1) raw logit.
+        self.boundary_head_01 = nn.Sequential(
+            nn.Linear(reduced_dim, 64),
+            nn.GELU(),
+            nn.Dropout(p=dropout),
+            nn.Linear(64, 1),
+        )
+
+        # 4c. Binary boundary head 2: KL1(target=0) vs KL2(target=1).
+        #     KL0 MUST be masked out before computing loss (done in Trainer).
+        #     KL3/KL4 MUST be masked out before computing loss (done in Trainer).
+        #     Output: (B, 1) raw logit.
+        self.boundary_head_12 = nn.Sequential(
+            nn.Linear(reduced_dim, 64),
+            nn.GELU(),
+            nn.Dropout(p=dropout),
+            nn.Linear(64, 1),
         )
 
         # Cached attention maps for optional debugging/visualization
@@ -109,7 +157,7 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
         """
         return self.last_medial_attention, self.last_lateral_attention
 
-    def forward(self, feature_map: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, feature_map: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass for FineGrainedBoundaryFeatureModule.
 
@@ -124,6 +172,15 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
             Tensor of shape (B, 256).
         low_grade_logits:
             Tensor of shape (B, 3) representing logits for [KL0, KL1, KL2].
+            Kept for backward compatibility with e2_fgbf.
+        boundary_logit_b01:
+            Tensor of shape (B, 1).
+            Raw binary logit for KL0-vs-KL1/KL2 boundary.
+            Caller (Trainer) masks to KL0/1/2 samples before computing loss.
+        boundary_logit_b12:
+            Tensor of shape (B, 1).
+            Raw binary logit for KL1-vs-KL2 boundary.
+            Caller (Trainer) masks to KL1/KL2 samples, excluding KL0.
         """
         # Defensive input shape checks
         if feature_map.ndim != 4:
@@ -177,8 +234,12 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
 
         boundary_feature = self.projection(fused)  # (B, 256)
 
-        # Step 5: Refinement head for [KL0, KL1, KL2]
+        # Step 5a: Original 3-class refinement head (backward compat, always computed)
         low_grade_logits = self.low_grade_head(boundary_feature)  # (B, 3)
+
+        # Step 5b: Binary boundary heads (new, always computed)
+        boundary_logit_b01 = self.boundary_head_01(boundary_feature)  # (B, 1)
+        boundary_logit_b12 = self.boundary_head_12(boundary_feature)  # (B, 1)
 
         # Defensive output shape checks
         if boundary_feature.shape != (B, self.reduced_dim):
@@ -189,5 +250,13 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
             raise RuntimeError(
                 f"Expected low_grade_logits shape ({B}, 3), got {tuple(low_grade_logits.shape)}"
             )
+        if boundary_logit_b01.shape != (B, 1):
+            raise RuntimeError(
+                f"Expected boundary_logit_b01 shape ({B}, 1), got {tuple(boundary_logit_b01.shape)}"
+            )
+        if boundary_logit_b12.shape != (B, 1):
+            raise RuntimeError(
+                f"Expected boundary_logit_b12 shape ({B}, 1), got {tuple(boundary_logit_b12.shape)}"
+            )
 
-        return boundary_feature, low_grade_logits
+        return boundary_feature, low_grade_logits, boundary_logit_b01, boundary_logit_b12

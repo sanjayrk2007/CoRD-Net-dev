@@ -222,7 +222,70 @@ class Trainer:
             loss_dict["proto"] = proto_loss
             loss_dict["total"] = loss_dict["total"] + proto_loss
 
-        if "fgbf_logits" in preds:
+        # ── FGBF loss routing ─────────────────────────────────────────────
+        # PATH A (e2_fgbf_boundary): two binary boundary heads.
+        #   Activated when fgbf_boundary_mode=True AND boundary logit keys exist.
+        #   L_b01  = BCE(fgbf_b01[kl<=2], (kl[kl<=2] >= 1).float())
+        #   L_b12  = BCE(fgbf_b12[kl==1|2], (kl[kl==1|2] == 2).float())
+        #   L_fgbf = 0.5 * L_b01 + 0.5 * L_b12
+        #   L_total = L_main + 0.10 * L_fgbf
+        #
+        # PATH B (e2_fgbf): original 3-class CE on KL0/1/2 samples.
+        #   Unchanged from the pre-boundary implementation.
+        #   Guarded by elif so it never fires when boundary keys exist.
+        # ─────────────────────────────────────────────────────────────────
+
+        if (
+            "fgbf_logits_b01" in preds
+            and "fgbf_logits_b12" in preds
+            and getattr(self.cfg.model, "fgbf_boundary_mode", False)
+        ):
+            # ── PATH A: Binary boundary heads (e2_fgbf_boundary only) ───
+            kl_targets = labels["kl"]
+            w_fgbf = getattr(self.cfg.model, "fgbf_loss_weight", 0.10)
+
+            # --- Boundary 1: KL0(0) vs KL1/KL2(1) ---
+            # Valid samples: all low-grade (KL0, KL1, KL2)
+            low_grade_mask = kl_targets <= 2           # bool (B,)
+            if low_grade_mask.any():
+                # b01 logits: (B, 1) → squeeze to (N_low,) for BCE
+                b01_logits  = preds["fgbf_logits_b01"][low_grade_mask].squeeze(1)  # (N_low,)
+                # Target: 0 for KL0, 1 for KL1 or KL2
+                b01_targets = (kl_targets[low_grade_mask] >= 1).float()             # (N_low,)
+                L_b01 = F.binary_cross_entropy_with_logits(b01_logits, b01_targets)
+            else:
+                # No low-grade samples in this minibatch — zero contribution,
+                # but keep gradient graph alive so backward() doesn't fail.
+                L_b01 = 0.0 * preds["fgbf_logits_b01"].sum()
+
+            # --- Boundary 2: KL1(0) vs KL2(1); KL0 explicitly excluded ---
+            # Valid samples: KL1 and KL2 only
+            kl12_mask = (kl_targets == 1) | (kl_targets == 2)  # bool (B,)
+            if kl12_mask.any():
+                # b12 logits: (B, 1) → squeeze to (N_12,) for BCE
+                b12_logits  = preds["fgbf_logits_b12"][kl12_mask].squeeze(1)   # (N_12,)
+                # Target: 0 for KL1, 1 for KL2
+                b12_targets = (kl_targets[kl12_mask] == 2).float()              # (N_12,)
+                L_b12 = F.binary_cross_entropy_with_logits(b12_logits, b12_targets)
+            else:
+                # No KL1/KL2 samples — keep graph alive.
+                L_b12 = 0.0 * preds["fgbf_logits_b12"].sum()
+
+            # Combined FGBF loss
+            L_fgbf = 0.5 * L_b01 + 0.5 * L_b12
+
+            loss_dict["fgbf"]               = L_fgbf
+            loss_dict["fgbf_loss"]          = L_fgbf
+            loss_dict["fgbf_b01_loss"]      = L_b01
+            loss_dict["fgbf_b12_loss"]      = L_b12
+            loss_dict["weighted_fgbf"]      = w_fgbf * L_fgbf
+            loss_dict["weighted_fgbf_loss"] = w_fgbf * L_fgbf
+            loss_dict["total"] = loss_dict["total"] + w_fgbf * L_fgbf
+
+        elif "fgbf_logits" in preds:
+            # ── PATH B: Original 3-class FGBF CE (e2_fgbf, e3_fgbf) ────
+            # IMPORTANT: This block is completely unchanged from the baseline.
+            # It must never fire for e2_fgbf_boundary (protected by elif).
             kl_targets = labels["kl"]
             low_grade_mask = (kl_targets <= 2)
             if low_grade_mask.any():

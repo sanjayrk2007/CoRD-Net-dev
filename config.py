@@ -68,6 +68,10 @@ class ModelConfig:
     fgbf_dropout: float = 0.1
     fgbf_loss_weight: float = 0.15
     fgbf_fuse_main: bool = False
+    fgbf_boundary_mode: bool = False
+    """When True, Trainer uses two binary boundary heads (b01, b12) instead
+    of the 3-class FGBF CE head.  Only set for e2_fgbf_boundary.
+    e2_fgbf is unaffected (fgbf_boundary_mode=False by default)."""
 
     # Ablation flags — set by get_config(experiment)
     use_stn: bool = False
@@ -197,6 +201,18 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
         }
     ),
 
+    "e2_fgbf_boundary": (
+        "E2 + FGBF Boundary Binary Heads (KL0|KL12 + KL1|KL2)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_fgbf": True,
+            "fgbf_boundary_mode": True,
+            "fgbf_loss_weight": 0.10,
+            "fgbf_fuse_main": False,
+        }
+    ),
+
     # Separate ablation only
     "e3": (
         "E2 + Dual-Intensity Stem",
@@ -298,7 +314,7 @@ def get_config(
     data_root: Optional[str] = None,
     metadata_csv: Optional[str] = None,
 ) -> Config:
-    """Return a fully-merged Config for *experiment* (e1 … e8, e2_fgbf, e3_fgbf)."""
+    """Return a fully-merged Config for *experiment* (e1 … e8, e2_fgbf, e3_fgbf, e2_fgbf_boundary)."""
     if experiment not in _EXPERIMENT_FLAGS:
         raise ValueError(
             f"Unknown experiment '{experiment}'. "
