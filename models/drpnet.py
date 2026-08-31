@@ -115,6 +115,7 @@ class DRPNet(nn.Module):
                 feature_dim=cfg.fgbf_feature_dim,
                 hidden_dim=cfg.fgbf_hidden_dim,
                 dropout=cfg.fgbf_dropout,
+                fgbf_block=cfg.fgbf_block,
             )
 
         # ── E4: Compartment Branches (injected backbone — no duplication) ─

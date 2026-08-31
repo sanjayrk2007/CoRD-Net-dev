@@ -68,6 +68,7 @@ class ModelConfig:
     fgbf_dropout: float = 0.1
     fgbf_loss_weight: float = 0.15
     fgbf_fuse_main: bool = False
+    fgbf_block: str = "baseline"
 
     # Ablation flags — set by get_config(experiment)
     use_stn: bool = False
@@ -185,6 +186,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
             "use_stn": False,
             "use_dual_intensity": False,
             "use_fgbf": True,
+            "fgbf_block": "baseline",
         }
     ),
 
@@ -194,6 +196,47 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
             "use_stn": True,
             "use_dual_intensity": False,
             "use_fgbf": True,
+            "fgbf_block": "baseline",
+        }
+    ),
+
+    "e2_fgbf_ms": (
+        "E2 + FGBF + Multi-Scale Feature Block",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_fgbf": True,
+            "fgbf_block": "multiscale",
+        }
+    ),
+
+    "e2_fgbf_sk": (
+        "E2 + FGBF + Selective Kernel Feature Block",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_fgbf": True,
+            "fgbf_block": "sk",
+        }
+    ),
+
+    "e2_fgbf_pim": (
+        "E2 + FGBF + PIM-Lite Feature Block",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_fgbf": True,
+            "fgbf_block": "pim",
+        }
+    ),
+
+    "e2_fgbf_cbam": (
+        "E2 + FGBF + CBAM-Lite Control Block",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_fgbf": True,
+            "fgbf_block": "cbam",
         }
     ),
 

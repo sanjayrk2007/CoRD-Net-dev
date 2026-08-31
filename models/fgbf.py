@@ -15,6 +15,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+from models.fgbf_blocks import build_fgbf_block
+
+
 class FineGrainedBoundaryFeatureModule(nn.Module):
     """
     Lightweight Boundary-Aware Low-Grade Feature Module (FGBF).
@@ -33,6 +36,9 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
         Dropout probability in projection and classifier heads (default: 0.1).
     eps:
         Epsilon for numerical stability during weighted spatial pooling normalization (default: 1e-6).
+    fgbf_block:
+        Fine-grained feature refinement block type (default: 'baseline').
+        Choices: 'baseline', 'multiscale', 'sk', 'pim', 'cbam'.
     """
 
     def __init__(
@@ -43,6 +49,7 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
         hidden_dim: int = 128,
         dropout: float = 0.1,
         eps: float = 1e-6,
+        fgbf_block: str = "baseline",
     ) -> None:
         super().__init__()
         if feature_dim is not None:
@@ -50,6 +57,7 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
         self.in_channels = in_channels
         self.reduced_dim = reduced_dim
         self.eps = eps
+        self.fgbf_block_type = fgbf_block
 
         # 1. Spatial channel reduction
         self.channel_reduce = nn.Sequential(
@@ -57,6 +65,9 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
             nn.BatchNorm2d(reduced_dim),
             nn.GELU(),
         )
+
+        # 1b. Fine-grained feature refinement block
+        self.block = build_fgbf_block(fgbf_block, reduced_dim)
 
         # 2. Lightweight attention conv network
         # Input has (reduced_dim + 1) channels due to appended horizontal grid
@@ -140,6 +151,9 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
 
         # Step 1: Channel reduction
         reduced_features = self.channel_reduce(feature_map)  # (B, 256, H, W)
+
+        # Step 1b: Fine-grained feature refinement block insertion point
+        reduced_features = self.block(reduced_features)       # (B, 256, H, W)
 
         # Step 2: Create normalized horizontal coordinate information
         x_grid = self._create_horizontal_grid(B, H, W, device=feature_map.device, dtype=feature_map.dtype)  # (B, 1, H, W)
