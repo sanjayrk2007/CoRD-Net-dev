@@ -1,0 +1,2 @@
+experiment,parameters,train_accuracy,val_accuracy,val_macro_f1,val_qwk,val_mae,test_accuracy,test_macro_f1,test_qwk,test_mae
+e2_fgbf_pim_v2,31486402,0.25,0.1875,0.13333333333333333,-0.3097345132743363,1.75,nan,nan,nan,nan

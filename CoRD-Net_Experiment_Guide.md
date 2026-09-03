@@ -70,13 +70,25 @@ python train.py --config configs/e4.yaml
 -   Visualize DRP attention maps.
 -   Remove visualization code before long training runs.
 
+## FGBF Module (Fine-Grained Boundary Feature)
+
+The FGBF module targets the chronic misclassification of KL1 ("doubtful" OA) as KL0 or KL2 by extracting high-frequency boundary and joint-space features.
+
+Key parameters in `ModelConfig`:
+- **`use_fgbf`** (`bool`): Enables the FGBF branch (`models/fgbf.py`).
+- **`fgbf_block`** (`str`): Selects the boundary feature extraction block (`"baseline"`, `"multiscale"`, `"sk"`, `"pim"`, `"cbam"`). Validated standard is `"pim"` (PIM-Lite).
+- **`fgbf_fuse_main`** (`bool`): When `True`, concatenates the 256-d boundary feature directly into the primary 5-way classifier input representation (`parts` list in `models/drpnet.py`), directly guiding KL grade prediction rather than only acting via auxiliary loss.
+- **`fgbf_loss_weight`** (`float`): Loss multiplier for the auxiliary 3-way (KL0, KL1, KL2) boundary classification loss in `trainer.py` (default: 0.15).
+
 ## Current Status
 
--   E1: Complete
--   E2: Complete
--   E3: Pending
--   E4: Cropping fixed; segmentation fault under investigation.
--   E5--E8: Pending
+-   **E1**: Baseline ConvNeXt complete (results in `results/e1`).
+-   **E2**: STN localization complete (results in `results/e2`).
+-   **E3**: Dual-Intensity Stem complete (results in `results/e3`).
+-   **E4**: STN + Compartment Branches complete (results in `results/e4`).
+-   **E5**: STN + Compartments + DRP complete (results in `results/e5`).
+-   **E2 FGBF Ablations**: `e2_fgbf`, `e2_fgbf_ms`, `e2_fgbf_sk`, `e2_fgbf_cbam`, `e2_fgbf_pim` complete; `e2_fgbf_pim_v2` introduces active main-classifier fusion (`fgbf_fuse_main=True`).
+-   **E6--E8**: Pending execution with fused FGBF.
 
 ## Notes
 

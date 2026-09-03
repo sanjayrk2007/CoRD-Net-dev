@@ -44,6 +44,53 @@ from utils import (
 logger = logging.getLogger(__name__)
 
 
+class WarmupPlateauScheduler:
+    """Combines LinearLR warmup with ReduceLROnPlateau."""
+
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        warmup_epochs: int,
+        plateau_scheduler: torch.optim.lr_scheduler.ReduceLROnPlateau,
+        start_factor: float = 0.1,
+    ) -> None:
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.plateau_scheduler = plateau_scheduler
+        self.warmup_scheduler = (
+            torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=start_factor, total_iters=warmup_epochs
+            )
+            if warmup_epochs > 0
+            else None
+        )
+        self.current_epoch = 0
+
+    def step(self, metric: Optional[float] = None) -> None:
+        self.current_epoch += 1
+        if self.warmup_scheduler is not None and self.current_epoch <= self.warmup_epochs:
+            self.warmup_scheduler.step()
+        elif self.plateau_scheduler is not None:
+            if metric is not None:
+                self.plateau_scheduler.step(metric)
+            else:
+                self.plateau_scheduler.step(0.0)
+
+    def state_dict(self) -> Dict:
+        return {
+            "current_epoch": self.current_epoch,
+            "warmup_state": self.warmup_scheduler.state_dict() if self.warmup_scheduler else None,
+            "plateau_state": self.plateau_scheduler.state_dict() if self.plateau_scheduler else None,
+        }
+
+    def load_state_dict(self, state_dict: Dict) -> None:
+        self.current_epoch = state_dict.get("current_epoch", 0)
+        if self.warmup_scheduler and state_dict.get("warmup_state"):
+            self.warmup_scheduler.load_state_dict(state_dict["warmup_state"])
+        if self.plateau_scheduler and state_dict.get("plateau_state"):
+            self.plateau_scheduler.load_state_dict(state_dict["plateau_state"])
+
+
 class Trainer:
     """
     Generic training loop for CoRD-Net experiments (E1–E8).
@@ -89,20 +136,24 @@ class Trainer:
         self.scheduler = self._build_scheduler()
         self.scaler    = GradScaler() if self.tcfg.amp else None
 
-        self.epoch    = 0
-        self.best_qwk = -1.0
+        self.epoch      = 0
+        self.best_qwk   = -1.0
+        self.best_score = -1.0
 
         # ── Per-epoch history (populated during fit) ──────────────────────
         self.history: Dict[str, List] = {
-            "epoch":         [],
-            "train_loss":    [],
-            "val_loss":      [],
+            "epoch":          [],
+            "train_loss":     [],
+            "val_loss":       [],
             "train_accuracy": [],
-            "val_accuracy":  [],
-            "val_macro_f1":  [],
-            "val_qwk":       [],
-            "val_mae":       [],
-            "learning_rate": [],
+            "val_accuracy":   [],
+            "val_macro_f1":   [],
+            "val_kl1_recall": [],
+            "val_kl1_f1":     [],
+            "val_score":      [],
+            "val_qwk":        [],
+            "val_mae":        [],
+            "learning_rate":  [],
         }
 
         log_model_summary(self.model, cfg.experiment)
@@ -129,18 +180,58 @@ class Trainer:
 
     def _build_scheduler(self):
         name = self.tcfg.scheduler.lower()
+        warmup_epochs = max(0, getattr(self.tcfg, "warmup_epochs", 0))
+
+        if name == "plateau":
+            plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                self.optimizer, mode="max", factor=0.5, patience=5
+            )
+            return WarmupPlateauScheduler(
+                self.optimizer,
+                warmup_epochs=warmup_epochs,
+                plateau_scheduler=plateau,
+                start_factor=0.1,
+            )
+
         if name == "cosine":
+            if warmup_epochs > 0:
+                warmup = torch.optim.lr_scheduler.LinearLR(
+                    self.optimizer, start_factor=0.1, total_iters=warmup_epochs
+                )
+                main_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer, T_max=max(1, self.tcfg.epochs - warmup_epochs)
+                )
+                return torch.optim.lr_scheduler.SequentialLR(
+                    self.optimizer, schedulers=[warmup, main_sched], milestones=[warmup_epochs]
+                )
             return torch.optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer, T_max=self.tcfg.epochs
             )
+
         if name == "step":
+            if warmup_epochs > 0:
+                warmup = torch.optim.lr_scheduler.LinearLR(
+                    self.optimizer, start_factor=0.1, total_iters=warmup_epochs
+                )
+                main_sched = torch.optim.lr_scheduler.StepLR(
+                    self.optimizer, step_size=30, gamma=0.1
+                )
+                return torch.optim.lr_scheduler.SequentialLR(
+                    self.optimizer, schedulers=[warmup, main_sched], milestones=[warmup_epochs]
+                )
             return torch.optim.lr_scheduler.StepLR(
                 self.optimizer, step_size=30, gamma=0.1
             )
+
         if name == "none":
+            if warmup_epochs > 0:
+                return torch.optim.lr_scheduler.LinearLR(
+                    self.optimizer, start_factor=0.1, total_iters=warmup_epochs
+                )
             return None
+
         raise ValueError(
-            f"Unknown scheduler '{self.tcfg.scheduler}'. Choose: cosine | step | none"
+            f"Unknown scheduler '{self.tcfg.scheduler}'. Choose: cosine | step | plateau | none"
         )
 
     # ── Batch unpacking ───────────────────────────────────────────────────────
@@ -425,6 +516,8 @@ class Trainer:
                 fgbf_logits=fgbf_cat,
             )
             result["macro_f1"] = full["macro_f1"]
+            result["kl1_recall"] = full.get("kl1_recall", 0.0)
+            result["kl1_f1"] = full.get("kl1_f1", 0.0)
             if fgbf_cat is not None:
                 result.update({k: v for k, v in full.items() if k.startswith("fgbf_")})
 
@@ -497,6 +590,7 @@ class Trainer:
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict()
                                     if self.scheduler else None,
+            "best_score":           self.best_score,
             "best_qwk":             self.best_qwk,
             "train_losses":         train_losses,
             "val_losses":           val_losses or {},
@@ -517,13 +611,14 @@ class Trainer:
             scheduler = self.scheduler,
             device    = self.device,
         )
-        self.epoch    = ckpt.get("epoch", 0)
-        self.best_qwk = ckpt.get("best_qwk", -1.0)
+        self.epoch      = ckpt.get("epoch", 0)
+        self.best_score = ckpt.get("best_score", -1.0)
+        self.best_qwk   = ckpt.get("best_qwk", -1.0)
         if "history" in ckpt:
             self.history = ckpt["history"]
         logger.info(
-            "Resumed from epoch %d  (best_val=%.4f)",
-            self.epoch, self.best_qwk,
+            "Resumed from epoch %d  (best_score=%.4f, best_qwk=%.4f)",
+            self.epoch, self.best_score, self.best_qwk,
         )
 
     # ── Main fit loop ─────────────────────────────────────────────────────────
@@ -584,7 +679,15 @@ class Trainer:
                 val_total   = val_metrics.get("total", float("inf"))
 
             val_qwk = val_metrics.get("kappa", -1.0)
-            if val_qwk > self.best_qwk:
+            val_macro_f1 = val_metrics.get("macro_f1", 0.0)
+            val_kl1_f1 = val_metrics.get("kl1_f1", 0.0)
+
+            # Composite monitor score: 0.5 * macro_f1 + 0.5 * kl1_f1 (robust against KL1 neglect)
+            score = 0.5 * val_macro_f1 + 0.5 * val_kl1_f1
+            log_parts.append(f"val/score={score:.4f}")
+
+            if score > self.best_score:
+                self.best_score = score
                 self.best_qwk = val_qwk
                 patience_counter = 0
                 self._save(epoch, train_losses, val_metrics, tag="best")
@@ -600,18 +703,30 @@ class Trainer:
             self.history["train_accuracy"].append(train_losses.get("accuracy", float("nan")))
             self.history["val_accuracy"].append(val_metrics.get("accuracy",  float("nan")))
             self.history["val_macro_f1"].append( val_metrics.get("macro_f1", float("nan")))
+            self.history["val_kl1_recall"].append(val_metrics.get("kl1_recall", float("nan")))
+            self.history["val_kl1_f1"].append(val_metrics.get("kl1_f1", float("nan")))
+            self.history["val_score"].append(score)
             self.history["val_qwk"].append(      val_metrics.get("kappa",    float("nan")))
             self.history["val_mae"].append(      val_metrics.get("mae",      float("nan")))
             self.history["learning_rate"].append(current_lr)
 
             if self.scheduler is not None:
-                self.scheduler.step()
+                if isinstance(self.scheduler, WarmupPlateauScheduler):
+                    self.scheduler.step(metric=score)
+                elif isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(score)
+                else:
+                    self.scheduler.step()
 
             if epoch % self.tcfg.save_every == 0:
                 self._save(epoch, train_losses, tag=f"epoch{epoch:04d}")
 
-            if self.tcfg.patience is not None and patience_counter >= self.tcfg.patience:
-                logger.info("Early stopping triggered at epoch %d (no val QWK improvement for %d epochs).", epoch, patience_counter)
+            min_epochs = getattr(self.tcfg, "min_epochs_before_early_stop", 15)
+            if self.tcfg.patience is not None and epoch >= min_epochs and patience_counter >= self.tcfg.patience:
+                logger.info(
+                    "Early stopping triggered at epoch %d (no composite score improvement for %d epochs; min_epochs=%d).",
+                    epoch, patience_counter, min_epochs
+                )
                 print(f"Early stopping at epoch {epoch}")
                 break
 
@@ -620,7 +735,7 @@ class Trainer:
         
         best_ckpt_path = Path(self.tcfg.checkpoint_dir) / f"{self.cfg.experiment}_best.pt"
         if best_ckpt_path.exists():
-            logger.info("Restoring best model checkpoint (val_qwk=%.4f) from %s for evaluation...", self.best_qwk, best_ckpt_path)
+            logger.info("Restoring best model checkpoint (best_score=%.4f, val_qwk=%.4f) from %s for evaluation...", self.best_score, self.best_qwk, best_ckpt_path)
             load_checkpoint(best_ckpt_path, self.model, device=self.device)
 
         logger.info("Training complete. Generating reports …")

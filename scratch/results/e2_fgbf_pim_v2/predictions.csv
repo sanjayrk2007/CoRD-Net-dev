@@ -1,0 +1,17 @@
+split,index,ground_truth,prediction,correct,confidence
+val,0,0,2,False,0.2094
+val,1,1,2,False,0.2147
+val,2,2,3,False,0.2174
+val,3,3,0,False,0.2154
+val,4,4,0,False,0.2104
+val,5,0,3,False,0.2096
+val,6,1,0,False,0.2130
+val,7,2,2,True,0.2081
+val,8,3,2,False,0.2178
+val,9,4,2,False,0.2168
+val,10,0,3,False,0.2096
+val,11,1,4,False,0.2096
+val,12,2,2,True,0.2285
+val,13,3,3,True,0.2221
+val,14,4,3,False,0.2149
+val,15,0,3,False,0.2111

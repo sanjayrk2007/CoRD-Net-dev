@@ -531,41 +531,63 @@ def print_final_results(
 
     def _block(split: str, m: Dict[str, float]) -> None:
         logger.info("%s", split.upper())
-        logger.info("  Overall Accuracy   : %.4f", m.get("accuracy",           float("nan")))
-        logger.info("  Macro Precision    : %.4f", m.get("macro_precision",    float("nan")))
-        logger.info("  Macro Recall       : %.4f", m.get("macro_recall",       float("nan")))
-        logger.info("  Macro F1           : %.4f", m.get("macro_f1",           float("nan")))
-        logger.info("  Weighted Precision : %.4f", m.get("weighted_precision", float("nan")))
-        logger.info("  Weighted Recall    : %.4f", m.get("weighted_recall",    float("nan")))
-        logger.info("  Weighted F1        : %.4f", m.get("weighted_f1",        float("nan")))
+        if not m:
+            logger.info("  Overall Accuracy   : N/A")
+            logger.info("  Macro Precision    : N/A")
+            logger.info("  Macro Recall       : N/A")
+            logger.info("  Macro F1           : N/A")
+            logger.info("  Weighted Precision : N/A")
+            logger.info("  Weighted Recall    : N/A")
+            logger.info("  Weighted F1        : N/A")
+            logger.info("  MAE                : N/A")
+            logger.info("  QWK                : N/A")
+            return
+
+        def _fmt(val, default="N/A", fmt="%.4f") -> str:
+            if val is None or (isinstance(val, (float, np.floating)) and np.isnan(val)):
+                return default
+            if isinstance(val, (int, np.integer)):
+                return str(val)
+            try:
+                return fmt % val
+            except Exception:
+                return str(val)
+
+        logger.info("  Overall Accuracy   : %s", _fmt(m.get("accuracy")))
+        logger.info("  Macro Precision    : %s", _fmt(m.get("macro_precision")))
+        logger.info("  Macro Recall       : %s", _fmt(m.get("macro_recall")))
+        logger.info("  Macro F1           : %s", _fmt(m.get("macro_f1")))
+        logger.info("  Weighted Precision : %s", _fmt(m.get("weighted_precision")))
+        logger.info("  Weighted Recall    : %s", _fmt(m.get("weighted_recall")))
+        logger.info("  Weighted F1        : %s", _fmt(m.get("weighted_f1")))
         if "mae" in m:
-            logger.info("  MAE                : %.4f", m["mae"])
+            logger.info("  MAE                : %s", _fmt(m.get("mae")))
         if "qwk" in m:
-            logger.info("  QWK                : %.4f", m["qwk"])
+            logger.info("  QWK                : %s", _fmt(m.get("qwk")))
 
         if "kl1_recall" in m:
-            logger.info("  KL0 Recall         : %.4f", m.get("kl0_recall", float("nan")))
-            logger.info("  KL1 Recall         : %.4f", m.get("kl1_recall", float("nan")))
-            logger.info("  KL1 F1             : %.4f", m.get("kl1_f1",     float("nan")))
-            logger.info("  KL2 Recall         : %.4f", m.get("kl2_recall", float("nan")))
+            logger.info("  KL0 Recall         : %s", _fmt(m.get("kl0_recall")))
+            logger.info("  KL1 Recall         : %s", _fmt(m.get("kl1_recall")))
+            logger.info("  KL1 F1             : %s", _fmt(m.get("kl1_f1")))
+            logger.info("  KL2 Recall         : %s", _fmt(m.get("kl2_recall")))
             logger.info("  Boundary Error Counts:")
-            logger.info("    KL1 -> KL0       : %d", m.get("boundary_KL1_to_KL0", 0))
-            logger.info("    KL1 -> KL2       : %d", m.get("boundary_KL1_to_KL2", 0))
-            logger.info("    KL0 -> KL1       : %d", m.get("boundary_KL0_to_KL1", 0))
-            logger.info("    KL2 -> KL1       : %d", m.get("boundary_KL2_to_KL1", 0))
+            logger.info("    KL1 -> KL0       : %s", _fmt(m.get("boundary_KL1_to_KL0"), default="0", fmt="%d"))
+            logger.info("    KL1 -> KL2       : %s", _fmt(m.get("boundary_KL1_to_KL2"), default="0", fmt="%d"))
+            logger.info("    KL0 -> KL1       : %s", _fmt(m.get("boundary_KL0_to_KL1"), default="0", fmt="%d"))
+            logger.info("    KL2 -> KL1       : %s", _fmt(m.get("boundary_KL2_to_KL1"), default="0", fmt="%d"))
 
         if "fgbf_low_grade_accuracy" in m:
             logger.info("  FGBF Diagnostics (Auxiliary Head):")
-            logger.info("    FGBF Low-Grade Acc : %.4f", m["fgbf_low_grade_accuracy"])
-            logger.info("    KL0 Prec/Rec/F1    : %.4f / %.4f / %.4f",
-                        m.get("fgbf_kl0_precision", 0), m.get("fgbf_kl0_recall", 0), m.get("fgbf_kl0_f1", 0))
-            logger.info("    KL1 Prec/Rec/F1    : %.4f / %.4f / %.4f",
-                        m.get("fgbf_kl1_precision", 0), m.get("fgbf_kl1_recall", 0), m.get("fgbf_kl1_f1", 0))
-            logger.info("    KL2 Prec/Rec/F1    : %.4f / %.4f / %.4f",
-                        m.get("fgbf_kl2_precision", 0), m.get("fgbf_kl2_recall", 0), m.get("fgbf_kl2_f1", 0))
+            logger.info("    FGBF Low-Grade Acc : %s", _fmt(m.get("fgbf_low_grade_accuracy")))
+            logger.info("    KL0 Prec/Rec/F1    : %s / %s / %s",
+                        _fmt(m.get("fgbf_kl0_precision")), _fmt(m.get("fgbf_kl0_recall")), _fmt(m.get("fgbf_kl0_f1")))
+            logger.info("    KL1 Prec/Rec/F1    : %s / %s / %s",
+                        _fmt(m.get("fgbf_kl1_precision")), _fmt(m.get("fgbf_kl1_recall")), _fmt(m.get("fgbf_kl1_f1")))
+            logger.info("    KL2 Prec/Rec/F1    : %s / %s / %s",
+                        _fmt(m.get("fgbf_kl2_precision")), _fmt(m.get("fgbf_kl2_recall")), _fmt(m.get("fgbf_kl2_f1")))
             logger.info("    FGBF Boundary Errors:")
-            logger.info("      KL1 -> KL0       : %d", m.get("fgbf_boundary_KL1_to_KL0", 0))
-            logger.info("      KL1 -> KL2       : %d", m.get("fgbf_boundary_KL1_to_KL2", 0))
+            logger.info("      KL1 -> KL0       : %s", _fmt(m.get("fgbf_boundary_KL1_to_KL0"), default="0", fmt="%d"))
+            logger.info("      KL1 -> KL2       : %s", _fmt(m.get("fgbf_boundary_KL1_to_KL2"), default="0", fmt="%d"))
 
     sep = "=" * 52
     logger.info(sep)
@@ -611,7 +633,7 @@ def generate_all_reports(
     val_metrics   = compute_all_metrics(val_logits, val_labels, num_classes, fgbf_logits=val_fgbf_logits)
 
     train_metrics: Dict[str, float] = {}
-    if train_logits is not None and train_labels is not None:
+    if train_logits is not None and train_labels is not None and len(train_logits) > 0 and len(train_labels) > 0:
         train_metrics = compute_all_metrics(train_logits, train_labels, num_classes, fgbf_logits=train_fgbf_logits)
 
     test_metrics:  Dict[str, float] = {}

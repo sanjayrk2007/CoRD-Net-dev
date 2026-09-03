@@ -126,16 +126,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--loss-type",
         type=str,
-        default="ce",
+        default=None,
         choices=["ce", "weighted_ce", "focal", "soft_qwk"],
-        help="Primary-head loss"
+        help="Primary-head loss (default: from config)"
     )
     p.add_argument(
         "--sampler",
         type=str,
-        default="none",
+        default=None,
         choices=["none", "weighted"],
-        help="Training sampler: none or weighted"
+        help="Training sampler: none or weighted (default: from config)"
     )
     p.add_argument(
         "--augmentation",
@@ -164,7 +164,10 @@ def main() -> None:
         metadata_csv  = args.metadata_csv,
     )
 
-    cfg.training.sampler = args.sampler
+    if args.sampler is not None:
+        cfg.training.sampler = args.sampler
+    if args.loss_type is not None:
+        cfg.training.loss_type = args.loss_type
     cfg.training.augmentation = args.augmentation
 
     if args.patience is not None:
@@ -188,6 +191,8 @@ def main() -> None:
     logger.info("  Device      : %s", cfg.training.device or "auto")
     logger.info("  Epochs      : %d", cfg.training.epochs)
     logger.info("  Batch size  : %d", cfg.training.batch_size)
+    logger.info("  Loss type   : %s", cfg.training.loss_type)
+    logger.info("  Sampler     : %s", cfg.training.sampler)
     logger.info("  Data root   : %s", cfg.training.data_root or "not set")
     logger.info("  Pretrained  : %s", cfg.model.pretrained)
     logger.info("  Results dir : %s", args.results_dir)
@@ -203,7 +208,7 @@ def main() -> None:
         MultiTaskLoss(cfg.training)
         if cfg.model.use_aux_heads
         else build_primary_loss(
-            args.loss_type,
+            cfg.training.loss_type,
             train_loader.dataset.samples,
             cfg.model.num_classes,
             cfg.training.device or "cuda",
@@ -225,8 +230,8 @@ def main() -> None:
     experiment_config = {
         "experiment": args.exp,
         "seed": args.seed,
-        "loss_type": args.loss_type,
-        "sampler": args.sampler,
+        "loss_type": cfg.training.loss_type,
+        "sampler": cfg.training.sampler,
         "augmentation": args.augmentation,
         "epochs": cfg.training.epochs,
         "patience": cfg.training.patience,

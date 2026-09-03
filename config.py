@@ -123,6 +123,9 @@ class TrainingConfig:
 
     sampler: str = "none"            # 'none' | 'weighted'
     augmentation: str = "mild"       # 'standard' | 'mild' | 'none'
+    loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk'
+    checkpoint_monitor: str = "qwk"  # 'qwk' | 'score' | 'macro_f1'
+    min_epochs_before_early_stop: int = 15
 
     # ── Dataset paths (set via CLI; no hardcoded paths) ───────────────────
     data_root: Optional[str] = None
@@ -159,7 +162,14 @@ class TrainingConfig:
 # Experiment registry
 # ──────────────────────────────────────────────────────────────────────────────
 
-_EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
+# Reusable flags fragment for validated FGBF module
+FGBF_FLAGS: Dict[str, any] = {
+    "use_fgbf": True,
+    "fgbf_block": "pim",
+    "fgbf_fuse_main": True,
+}
+
+_EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
     "e1": (
         "Baseline ConvNeXt",
         {}
@@ -230,6 +240,15 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
         }
     ),
 
+    "e2_fgbf_pim_v2": (
+        "E2 + FGBF + PIM-Lite Feature Block (Fused)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            **FGBF_FLAGS,
+        }
+    ),
+
     "e2_fgbf_cbam": (
         "E2 + FGBF + CBAM-Lite Control Block",
         {
@@ -246,6 +265,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
         {
             "use_stn": True,
             "use_dual_intensity": True,
+            **FGBF_FLAGS,
         }
     ),
 
@@ -254,7 +274,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
         {
             "use_stn": True,
             "use_dual_intensity": True,
-            "use_fgbf": True,
+            **FGBF_FLAGS,
         }
     ),
 
@@ -265,6 +285,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
             "use_stn": True,
             "use_dual_intensity": False,
             "use_compartment": True,
+            **FGBF_FLAGS,
         }
     ),
 
@@ -275,6 +296,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
             "use_dual_intensity": False,
             "use_compartment": True,
             "use_drp": True,
+            **FGBF_FLAGS,
         }
     ),
 
@@ -286,6 +308,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
             "use_compartment": True,
             "use_drp": True,
             "use_pgr": True,
+            **FGBF_FLAGS,
         }
     ),
 
@@ -298,6 +321,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
             "use_drp": True,
             "use_pgr": True,
             "use_rtc": True,
+            **FGBF_FLAGS,
         }
     ),
 
@@ -311,6 +335,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, bool]]] = {
             "use_pgr": True,
             "use_rtc": True,
             "use_aux_heads": True,
+            **FGBF_FLAGS,
         }
     ),
 }
@@ -350,6 +375,12 @@ def get_config(
     _, flags = _EXPERIMENT_FLAGS[experiment]
     model_cfg = ModelConfig(pretrained=pretrained, **flags)
     train_cfg = TrainingConfig()
+
+    # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
+    if experiment in ("e2_fgbf_pim_v2", "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
+        train_cfg.loss_type = "weighted_ce"
+        train_cfg.sampler = "weighted"
+
     if device is not None:
         train_cfg.device = device
     if batch_size is not None:
