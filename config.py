@@ -288,6 +288,31 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         }
     ),
 
+    # v3 result: best_score peaked at epoch 4 (lr=6.4e-5, still ramping
+    # through warmup) and was never beaten again in 20 further epochs.
+    # Per-epoch log shows why: LR hits its cosine peak (1e-4) at epoch 6
+    # and stays within ~10% of peak for the rest of the run (T_max=55 vs.
+    # a patience-limited real run length of ~24 epochs — the schedule
+    # never gets far enough into its decay to matter). Epoch 10 shows an
+    # outright collapse (score 0.19, kappa 0.36) at near-peak LR, and
+    # KL1 F1 *does* clear epoch 4's value more than once later on
+    # (epochs 13/17/19), but always at KL0's or KL2's expense — the
+    # model keeps sliding between class-biased optima instead of holding
+    # a joint balance, consistent with LR staying too high for too long
+    # rather than a validation-noise artifact. v3c isolates exactly two
+    # changes vs v3: halve the peak LR and extend warmup so more of the
+    # run happens in the gentler, epoch-4-like regime. sampler_power and
+    # checkpoint_monitor are kept at v3's values so any change in outcome
+    # is attributable to the LR schedule alone.
+    "e2_fgbf_pim_v3c": (
+        "E2 + FGBF + PIM-Lite Feature Block (v3 + stabilized LR schedule)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            **FGBF_FLAGS,
+        }
+    ),
+
     "e2_fgbf_cbam": (
         "E2 + FGBF + CBAM-Lite Control Block",
         {
@@ -417,6 +442,7 @@ def get_config(
 
     # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
     if experiment in ("e2_fgbf_pim_v2", "e2_fgbf_pim_v3", "e2_fgbf_pim_v3b",
+                       "e2_fgbf_pim_v3c",
                        "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
@@ -424,13 +450,23 @@ def get_config(
     # v3: soften the sampler (avoid stacking two full corrections on the same
     # imbalance) and switch to the guarded composite monitor. Nothing else
     # changes vs v2 — see the registry comment above for why.
-    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b"):
+    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b", "e2_fgbf_pim_v3c"):
         train_cfg.sampler_power = 0.5
         train_cfg.checkpoint_monitor = "score"
 
     # v3b: isolated follow-up, only run if v3 needs more help.
     if experiment == "e2_fgbf_pim_v3b":
         train_cfg.weight_decay = 2e-4
+
+    # v3c: isolated LR-stability follow-up — see registry comment above.
+    # Halve peak LR and extend warmup from 5 -> 8 epochs so the model
+    # spends more of its (patience-limited) real training window in the
+    # gentler regime that produced v3's epoch-4 peak, instead of jumping
+    # to and lingering at a peak LR the fused model can't hold a joint
+    # class balance at.
+    if experiment == "e2_fgbf_pim_v3c":
+        train_cfg.learning_rate = 5e-5
+        train_cfg.warmup_epochs = 8
 
     if device is not None:
         train_cfg.device = device
