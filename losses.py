@@ -31,13 +31,25 @@ import torch.nn.functional as F
 from config import TrainingConfig
 
 
-def compute_class_weights(samples, num_classes: int, beta: float = 0.999) -> torch.Tensor:
-    """Class-Balanced weights (Cui et al. 2019) — gentler than raw inverse frequency."""
+def compute_class_weights(samples, num_classes: int, beta: float = 0.999,
+                           max_ratio: Optional[float] = 4.0) -> torch.Tensor:
+    """Class-Balanced weights (Cui et al. 2019) — gentler than raw inverse frequency.
+
+    max_ratio: if set, clips weights to [mean/max_ratio, mean*max_ratio] after
+    normalization, so the rarest class can't get an unbounded loss multiplier.
+    Matters when this loss is combined with a WeightedRandomSampler (see
+    dataset.py's sampler_power) — otherwise the two corrections compound and
+    over-boost minority classes at their neighbors' expense.
+    """
     counts = Counter(s.kl for s in samples)
     counts_t = torch.tensor([counts.get(i, 1) for i in range(num_classes)], dtype=torch.float)
     effective_num = 1.0 - torch.pow(torch.tensor(beta), counts_t)
     weights = (1.0 - beta) / effective_num
-    return weights / weights.sum() * num_classes
+    weights = weights / weights.sum() * num_classes
+    if max_ratio is not None:
+        mean_w = weights.mean()
+        weights = torch.clamp(weights, min=mean_w / max_ratio, max=mean_w * max_ratio)
+    return weights
 
 
 class FocalLoss(nn.Module):

@@ -414,8 +414,15 @@ def _make_loader(
     if split == "train" and getattr(cfg_train, "sampler", "none") == "weighted":
         counts = Counter(s.kl for s in samples)
 
+        # sampler_power=1.0 -> full inverse-frequency (equalizes classes fully).
+        # sampler_power=0.5 -> softened (sqrt) rebalancing — use this when
+        # loss_type is already 'weighted_ce', to avoid double-correcting the
+        # same imbalance in both batch composition and the loss.
+        # sampler_power=0.0 -> uniform sampling (same as sampler='none').
+        power = getattr(cfg_train, "sampler_power", 1.0)
+
         sample_weights = [
-            1.0 / counts[s.kl]
+            1.0 / (counts[s.kl] ** power)
             for s in samples
         ]
 

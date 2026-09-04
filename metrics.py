@@ -216,15 +216,34 @@ def compute_all_metrics(
         "qwk":                quadratic_kappa(preds, l, num_classes),
         # Class-specific metrics for low-grade boundary error analysis
         "kl0_recall":         float(rec_per_class[0]) if num_classes > 0 else 0.0,
+        "kl0_f1":             float(f1_per_class[0])  if num_classes > 0 else 0.0,
         "kl1_recall":         float(rec_per_class[1]) if num_classes > 1 else 0.0,
         "kl1_f1":             float(f1_per_class[1])  if num_classes > 1 else 0.0,
         "kl2_recall":         float(rec_per_class[2]) if num_classes > 2 else 0.0,
+        "kl2_f1":             float(f1_per_class[2])  if num_classes > 2 else 0.0,
         # Key boundary error counts from 5x5 confusion matrix
         "boundary_KL1_to_KL0": int(cm[1, 0]) if num_classes > 1 else 0,
         "boundary_KL1_to_KL2": int(cm[1, 2]) if num_classes > 2 else 0,
         "boundary_KL0_to_KL1": int(cm[0, 1]) if num_classes > 1 else 0,
         "boundary_KL2_to_KL1": int(cm[2, 1]) if num_classes > 2 else 0,
     }
+
+    # Generalized regression guard, scoped to the demonstrated collapse-prone
+    # KL0/KL1/KL2 triangle rather than all 5 classes. KL3/KL4 are excluded on
+    # purpose: they have consistently high recall (>0.70) across every
+    # experiment run so far, and KL4's tiny support (51 test / 27 val samples)
+    # would make a global 5-class minimum noisy and prone to false alarms
+    # unrelated to the actual failure mode this guard exists to catch.
+    if num_classes > 2:
+        low_grade_recalls = rec_per_class[:3]
+        low_grade_f1s     = f1_per_class[:3]
+        metrics["low_grade_min_recall"] = float(low_grade_recalls.min())
+        metrics["low_grade_min_f1"]     = float(low_grade_f1s.min())
+        metrics["low_grade_worst_class"] = int(low_grade_recalls.argmin())
+    else:
+        metrics["low_grade_min_recall"] = 0.0
+        metrics["low_grade_min_f1"] = 0.0
+        metrics["low_grade_worst_class"] = -1
 
     if fgbf_logits is not None:
         fgbf_m = compute_fgbf_metrics(fgbf_logits, labels)

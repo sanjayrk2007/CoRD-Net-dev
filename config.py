@@ -122,10 +122,20 @@ class TrainingConfig:
     patience: Optional[int] = None    # None = disable early stopping
 
     sampler: str = "none"            # 'none' | 'weighted'
+    sampler_power: float = 1.0       # 1.0=full inverse-freq, 0.5=sqrt-softened, 0.0=uniform.
+                                      # Use < 1.0 when loss_type is already 'weighted_ce' to
+                                      # avoid double-correcting the same imbalance.
     augmentation: str = "mild"       # 'standard' | 'mild' | 'none'
     loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk'
-    checkpoint_monitor: str = "qwk"  # 'qwk' | 'score' | 'macro_f1'
+    # 'qwk' | 'kl1_only' | 'score'. Historical note: this field was declared
+    # but never read by trainer.py before this patch, so every experiment run
+    # so far (including e2_fgbf_pim_v2) actually used the 'kl1_only' formula
+    # regardless of this value. Default corrected to match that reality.
+    checkpoint_monitor: str = "kl1_only"
     min_epochs_before_early_stop: int = 15
+    low_grade_recall_floor: float = 0.30  # checkpoint guard (monitor="score" only):
+                                           # don't save "best" if the weakest of
+                                           # KL0/KL1/KL2 recall drops below this
 
     # ── Dataset paths (set via CLI; no hardcoded paths) ───────────────────
     data_root: Optional[str] = None
@@ -242,6 +252,35 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
 
     "e2_fgbf_pim_v2": (
         "E2 + FGBF + PIM-Lite Feature Block (Fused)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            **FGBF_FLAGS,
+        }
+    ),
+
+    # v2 result: KL1 recall 0.44/0.42 (val/test) but KL2 recall regressed to
+    # 0.43/0.39 (was ~0.60 unfused) — the sampler (raw inverse-freq) and
+    # weighted_ce loss were both fully correcting the same imbalance at once,
+    # over-boosting KL1 at its neighbors' expense. v3 isolates exactly two
+    # changes vs v2: soften the sampler (sampler_power) and switch to the
+    # guarded composite checkpoint monitor. fgbf_loss_weight and weight_decay
+    # are deliberately left at v2's values so any change in outcome can be
+    # attributed to these two fixes alone, not conflated with other knobs.
+    "e2_fgbf_pim_v3": (
+        "E2 + FGBF + PIM-Lite Feature Block (Fused, softened rebalance)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            **FGBF_FLAGS,
+        }
+    ),
+
+    # Follow-up only — run after v3, and only if v3 alone doesn't fully
+    # resolve the KL1/KL2 trade-off. Adds weight_decay on top of v3 in
+    # isolation so its effect isn't conflated with the sampler/monitor fix.
+    "e2_fgbf_pim_v3b": (
+        "E2 + FGBF + PIM-Lite Feature Block (v3 + higher weight decay)",
         {
             "use_stn": True,
             "use_dual_intensity": False,
@@ -377,9 +416,21 @@ def get_config(
     train_cfg = TrainingConfig()
 
     # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
-    if experiment in ("e2_fgbf_pim_v2", "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
+    if experiment in ("e2_fgbf_pim_v2", "e2_fgbf_pim_v3", "e2_fgbf_pim_v3b",
+                       "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
+
+    # v3: soften the sampler (avoid stacking two full corrections on the same
+    # imbalance) and switch to the guarded composite monitor. Nothing else
+    # changes vs v2 — see the registry comment above for why.
+    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b"):
+        train_cfg.sampler_power = 0.5
+        train_cfg.checkpoint_monitor = "score"
+
+    # v3b: isolated follow-up, only run if v3 needs more help.
+    if experiment == "e2_fgbf_pim_v3b":
+        train_cfg.weight_decay = 2e-4
 
     if device is not None:
         train_cfg.device = device

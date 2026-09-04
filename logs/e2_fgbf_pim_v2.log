@@ -1,0 +1,29 @@
+2026-09-03 22:10:28 | INFO     | utils | Logging to logs/e2_fgbf_pim_v2.log
+2026-09-03 22:10:28 | INFO     | __main__ | CoRD-Net Ablation Suite | device=auto | batch=2 | steps=5
+2026-09-03 22:10:28 | INFO     | __main__ | 
+2026-09-03 22:10:28 | INFO     | __main__ | ==============================================================
+2026-09-03 22:10:28 | INFO     | __main__ |   E2_FGBF_PIM_V2 — E2 + FGBF + PIM-Lite Feature Block (Fused)
+2026-09-03 22:10:28 | INFO     | __main__ | ==============================================================
+2026-09-03 22:10:28 | INFO     | utils | ┌─ E2_FGBF_PIM_V2 active modules ──────────────────────┐
+2026-09-03 22:10:28 | INFO     | utils | │  ✓  STN (Auto-Localization)                        │
+2026-09-03 22:10:28 | INFO     | utils | │  ✗  Dual-Intensity Stem                            │
+2026-09-03 22:10:28 | INFO     | utils | │  ✗  Compartment Branches                           │
+2026-09-03 22:10:28 | INFO     | utils | │  ✗  Soft ROI Mask (DRP Block)                      │
+2026-09-03 22:10:28 | INFO     | utils | │  ✗  Prototype-Guided Refinement (PGR)              │
+2026-09-03 22:10:28 | INFO     | utils | │  ✗  Relational Token Coupling (RTC)                │
+2026-09-03 22:10:28 | INFO     | utils | │  ✗  Auxiliary Heads                                │
+2026-09-03 22:10:28 | INFO     | utils | └────────────────────────────────────────────────────┘
+2026-09-03 22:10:28 | INFO     | utils | ┌─ E2_FGBF_PIM_V2 parameter summary ──────────────────┐
+2026-09-03 22:10:28 | INFO     | utils | │  Total parameters    : 31,486,402                  │
+2026-09-03 22:10:28 | INFO     | utils | │  Trainable parameters: 31,486,402                  │
+2026-09-03 22:10:28 | INFO     | utils | └────────────────────────────────────────────────────┘
+2026-09-03 22:10:30 | INFO     | trainer |   step 1/5  kl=1.5023 | main=1.5023 | total=1.6671 | fgbf=1.0983 | fgbf_loss=1.0983 | weighted_fgbf=0.1648 | weighted_fgbf_loss=0.1648
+2026-09-03 22:10:31 | INFO     | trainer |   step 2/5  kl=1.4198 | main=1.4198 | total=1.5878 | fgbf=1.1200 | fgbf_loss=1.1200 | weighted_fgbf=0.1680 | weighted_fgbf_loss=0.1680
+2026-09-03 22:10:33 | INFO     | trainer |   step 3/5  kl=1.6314 | main=1.6314 | total=1.7997 | fgbf=1.1220 | fgbf_loss=1.1220 | weighted_fgbf=0.1683 | weighted_fgbf_loss=0.1683
+2026-09-03 22:10:34 | INFO     | trainer |   step 4/5  kl=1.7166 | main=1.7166 | total=1.8620 | fgbf=0.9693 | fgbf_loss=0.9693 | weighted_fgbf=0.1454 | weighted_fgbf_loss=0.1454
+2026-09-03 22:10:36 | INFO     | trainer |   step 5/5  kl=1.5236 | main=1.5236 | total=1.6756 | fgbf=1.0133 | fgbf_loss=1.0133 | weighted_fgbf=0.1520 | weighted_fgbf_loss=0.1520
+2026-09-03 22:10:36 | INFO     | __main__ |   E2_FGBF_PIM_V2 PASS ✓  final total=1.6756
+2026-09-03 22:10:36 | INFO     | __main__ | 
+2026-09-03 22:10:36 | INFO     | __main__ | ==============================================================
+2026-09-03 22:10:36 | INFO     | __main__ |   Done — 1 experiment(s) passed ✓
+2026-09-03 22:10:36 | INFO     | __main__ | ==============================================================

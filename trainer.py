@@ -150,6 +150,8 @@ class Trainer:
             "val_macro_f1":   [],
             "val_kl1_recall": [],
             "val_kl1_f1":     [],
+            "val_kl2_f1":     [],
+            "val_low_grade_min_recall": [],
             "val_score":      [],
             "val_qwk":        [],
             "val_mae":        [],
@@ -516,8 +518,14 @@ class Trainer:
                 fgbf_logits=fgbf_cat,
             )
             result["macro_f1"] = full["macro_f1"]
+            result["kl0_f1"] = full.get("kl0_f1", 0.0)
             result["kl1_recall"] = full.get("kl1_recall", 0.0)
             result["kl1_f1"] = full.get("kl1_f1", 0.0)
+            result["kl2_recall"] = full.get("kl2_recall", 0.0)
+            result["kl2_f1"] = full.get("kl2_f1", 0.0)
+            result["low_grade_min_recall"] = full.get("low_grade_min_recall", 0.0)
+            result["low_grade_min_f1"] = full.get("low_grade_min_f1", 0.0)
+            result["low_grade_worst_class"] = full.get("low_grade_worst_class", -1)
             if fgbf_cat is not None:
                 result.update({k: v for k, v in full.items() if k.startswith("fgbf_")})
 
@@ -681,18 +689,59 @@ class Trainer:
             val_qwk = val_metrics.get("kappa", -1.0)
             val_macro_f1 = val_metrics.get("macro_f1", 0.0)
             val_kl1_f1 = val_metrics.get("kl1_f1", 0.0)
+            val_kl2_f1 = val_metrics.get("kl2_f1", 0.0)
+            val_low_grade_min_recall = val_metrics.get("low_grade_min_recall", 0.0)
 
-            # Composite monitor score: 0.5 * macro_f1 + 0.5 * kl1_f1 (robust against KL1 neglect)
-            score = 0.5 * val_macro_f1 + 0.5 * val_kl1_f1
+            # checkpoint_monitor dispatch. NOTE: this field existed in config.py
+            # before this patch but was never read here — every experiment to
+            # date (including e2_fgbf_pim_v2) actually ran on "kl1_only" below,
+            # regardless of what checkpoint_monitor said. That default is fixed
+            # in config.py alongside this change so the two stay honest.
+            #
+            #   "qwk"      — pure QWK selection (kept for a true ablation only;
+            #                not used by any experiment run so far).
+            #   "kl1_only" — 0.5*macro_f1 + 0.5*kl1_f1, no regression guard.
+            #                This is what e2_fgbf_pim_v2 actually ran on, and
+            #                is kept as-is for exact reproducibility.
+            #   "score"    — composite covering both low-grade classes in
+            #                tension (KL1 and KL2), gated by a regression guard
+            #                on whichever of KL0/KL1/KL2 is currently weakest,
+            #                so improving one can't silently collapse another.
+            monitor = getattr(self.tcfg, "checkpoint_monitor", "kl1_only")
+
+            if monitor == "score":
+                score = 0.4 * val_macro_f1 + 0.3 * val_kl1_f1 + 0.3 * val_kl2_f1
+                min_epochs = getattr(self.tcfg, "min_epochs_before_early_stop", 15)
+                floor = getattr(self.tcfg, "low_grade_recall_floor", 0.30)
+                # Exempt the warmup window: metrics are noisy before the model
+                # stabilizes, and this exemption guarantees at least one
+                # checkpoint gets saved even if the floor is never cleared
+                # again later in the run.
+                guard_ok = (val_low_grade_min_recall >= floor) or (epoch < min_epochs)
+            elif monitor == "kl1_only":
+                score = 0.5 * val_macro_f1 + 0.5 * val_kl1_f1
+                guard_ok = True
+            else:  # "qwk"
+                score = val_qwk
+                guard_ok = True
+
             log_parts.append(f"val/score={score:.4f}")
 
-            if score > self.best_score:
+            if score > self.best_score and guard_ok:
                 self.best_score = score
                 self.best_qwk = val_qwk
                 patience_counter = 0
                 self._save(epoch, train_losses, val_metrics, tag="best")
             else:
                 patience_counter += 1
+                if score > self.best_score and not guard_ok:
+                    logger.warning(
+                        "Epoch %d: score %.4f would be a new best, but low-grade "
+                        "min recall %.3f (worst class idx %d) is below floor %.2f "
+                        "— not saving as 'best' this epoch.",
+                        epoch, score, val_low_grade_min_recall,
+                        int(val_metrics.get("low_grade_worst_class", -1)), floor,
+                    )
 
             logger.info(" | ".join(log_parts))
 
@@ -705,6 +754,8 @@ class Trainer:
             self.history["val_macro_f1"].append( val_metrics.get("macro_f1", float("nan")))
             self.history["val_kl1_recall"].append(val_metrics.get("kl1_recall", float("nan")))
             self.history["val_kl1_f1"].append(val_metrics.get("kl1_f1", float("nan")))
+            self.history["val_kl2_f1"].append(val_metrics.get("kl2_f1", float("nan")))
+            self.history["val_low_grade_min_recall"].append(val_metrics.get("low_grade_min_recall", float("nan")))
             self.history["val_score"].append(score)
             self.history["val_qwk"].append(      val_metrics.get("kappa",    float("nan")))
             self.history["val_mae"].append(      val_metrics.get("mae",      float("nan")))

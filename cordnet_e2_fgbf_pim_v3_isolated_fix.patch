@@ -1,0 +1,275 @@
+diff --git a/config.py b/config.py
+--- a/config.py
++++ b/config.py
+@@ -122,10 +122,20 @@
+     patience: Optional[int] = None    # None = disable early stopping
+ 
+     sampler: str = "none"            # 'none' | 'weighted'
++    sampler_power: float = 1.0       # 1.0=full inverse-freq, 0.5=sqrt-softened, 0.0=uniform.
++                                      # Use < 1.0 when loss_type is already 'weighted_ce' to
++                                      # avoid double-correcting the same imbalance.
+     augmentation: str = "mild"       # 'standard' | 'mild' | 'none'
+     loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk'
+-    checkpoint_monitor: str = "qwk"  # 'qwk' | 'score' | 'macro_f1'
++    # 'qwk' | 'kl1_only' | 'score'. Historical note: this field was declared
++    # but never read by trainer.py before this patch, so every experiment run
++    # so far (including e2_fgbf_pim_v2) actually used the 'kl1_only' formula
++    # regardless of this value. Default corrected to match that reality.
++    checkpoint_monitor: str = "kl1_only"
+     min_epochs_before_early_stop: int = 15
++    low_grade_recall_floor: float = 0.30  # checkpoint guard (monitor="score" only):
++                                           # don't save "best" if the weakest of
++                                           # KL0/KL1/KL2 recall drops below this
+ 
+     # ── Dataset paths (set via CLI; no hardcoded paths) ───────────────────
+     data_root: Optional[str] = None
+@@ -249,6 +259,35 @@
+         }
+     ),
+ 
++    # v2 result: KL1 recall 0.44/0.42 (val/test) but KL2 recall regressed to
++    # 0.43/0.39 (was ~0.60 unfused) — the sampler (raw inverse-freq) and
++    # weighted_ce loss were both fully correcting the same imbalance at once,
++    # over-boosting KL1 at its neighbors' expense. v3 isolates exactly two
++    # changes vs v2: soften the sampler (sampler_power) and switch to the
++    # guarded composite checkpoint monitor. fgbf_loss_weight and weight_decay
++    # are deliberately left at v2's values so any change in outcome can be
++    # attributed to these two fixes alone, not conflated with other knobs.
++    "e2_fgbf_pim_v3": (
++        "E2 + FGBF + PIM-Lite Feature Block (Fused, softened rebalance)",
++        {
++            "use_stn": True,
++            "use_dual_intensity": False,
++            **FGBF_FLAGS,
++        }
++    ),
++
++    # Follow-up only — run after v3, and only if v3 alone doesn't fully
++    # resolve the KL1/KL2 trade-off. Adds weight_decay on top of v3 in
++    # isolation so its effect isn't conflated with the sampler/monitor fix.
++    "e2_fgbf_pim_v3b": (
++        "E2 + FGBF + PIM-Lite Feature Block (v3 + higher weight decay)",
++        {
++            "use_stn": True,
++            "use_dual_intensity": False,
++            **FGBF_FLAGS,
++        }
++    ),
++
+     "e2_fgbf_cbam": (
+         "E2 + FGBF + CBAM-Lite Control Block",
+         {
+@@ -377,10 +416,22 @@
+     train_cfg = TrainingConfig()
+ 
+     # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
+-    if experiment in ("e2_fgbf_pim_v2", "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
++    if experiment in ("e2_fgbf_pim_v2", "e2_fgbf_pim_v3", "e2_fgbf_pim_v3b",
++                       "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
+         train_cfg.loss_type = "weighted_ce"
+         train_cfg.sampler = "weighted"
+ 
++    # v3: soften the sampler (avoid stacking two full corrections on the same
++    # imbalance) and switch to the guarded composite monitor. Nothing else
++    # changes vs v2 — see the registry comment above for why.
++    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b"):
++        train_cfg.sampler_power = 0.5
++        train_cfg.checkpoint_monitor = "score"
++
++    # v3b: isolated follow-up, only run if v3 needs more help.
++    if experiment == "e2_fgbf_pim_v3b":
++        train_cfg.weight_decay = 2e-4
++
+     if device is not None:
+         train_cfg.device = device
+     if batch_size is not None:
+diff --git a/trainer.py b/trainer.py
+--- a/trainer.py
++++ b/trainer.py
+@@ -150,6 +150,8 @@
+             "val_macro_f1":   [],
+             "val_kl1_recall": [],
+             "val_kl1_f1":     [],
++            "val_kl2_f1":     [],
++            "val_low_grade_min_recall": [],
+             "val_score":      [],
+             "val_qwk":        [],
+             "val_mae":        [],
+@@ -516,8 +518,14 @@
+                 fgbf_logits=fgbf_cat,
+             )
+             result["macro_f1"] = full["macro_f1"]
++            result["kl0_f1"] = full.get("kl0_f1", 0.0)
+             result["kl1_recall"] = full.get("kl1_recall", 0.0)
+             result["kl1_f1"] = full.get("kl1_f1", 0.0)
++            result["kl2_recall"] = full.get("kl2_recall", 0.0)
++            result["kl2_f1"] = full.get("kl2_f1", 0.0)
++            result["low_grade_min_recall"] = full.get("low_grade_min_recall", 0.0)
++            result["low_grade_min_f1"] = full.get("low_grade_min_f1", 0.0)
++            result["low_grade_worst_class"] = full.get("low_grade_worst_class", -1)
+             if fgbf_cat is not None:
+                 result.update({k: v for k, v in full.items() if k.startswith("fgbf_")})
+ 
+@@ -681,18 +689,59 @@
+             val_qwk = val_metrics.get("kappa", -1.0)
+             val_macro_f1 = val_metrics.get("macro_f1", 0.0)
+             val_kl1_f1 = val_metrics.get("kl1_f1", 0.0)
++            val_kl2_f1 = val_metrics.get("kl2_f1", 0.0)
++            val_low_grade_min_recall = val_metrics.get("low_grade_min_recall", 0.0)
++
++            # checkpoint_monitor dispatch. NOTE: this field existed in config.py
++            # before this patch but was never read here — every experiment to
++            # date (including e2_fgbf_pim_v2) actually ran on "kl1_only" below,
++            # regardless of what checkpoint_monitor said. That default is fixed
++            # in config.py alongside this change so the two stay honest.
++            #
++            #   "qwk"      — pure QWK selection (kept for a true ablation only;
++            #                not used by any experiment run so far).
++            #   "kl1_only" — 0.5*macro_f1 + 0.5*kl1_f1, no regression guard.
++            #                This is what e2_fgbf_pim_v2 actually ran on, and
++            #                is kept as-is for exact reproducibility.
++            #   "score"    — composite covering both low-grade classes in
++            #                tension (KL1 and KL2), gated by a regression guard
++            #                on whichever of KL0/KL1/KL2 is currently weakest,
++            #                so improving one can't silently collapse another.
++            monitor = getattr(self.tcfg, "checkpoint_monitor", "kl1_only")
++
++            if monitor == "score":
++                score = 0.4 * val_macro_f1 + 0.3 * val_kl1_f1 + 0.3 * val_kl2_f1
++                min_epochs = getattr(self.tcfg, "min_epochs_before_early_stop", 15)
++                floor = getattr(self.tcfg, "low_grade_recall_floor", 0.30)
++                # Exempt the warmup window: metrics are noisy before the model
++                # stabilizes, and this exemption guarantees at least one
++                # checkpoint gets saved even if the floor is never cleared
++                # again later in the run.
++                guard_ok = (val_low_grade_min_recall >= floor) or (epoch < min_epochs)
++            elif monitor == "kl1_only":
++                score = 0.5 * val_macro_f1 + 0.5 * val_kl1_f1
++                guard_ok = True
++            else:  # "qwk"
++                score = val_qwk
++                guard_ok = True
+ 
+-            # Composite monitor score: 0.5 * macro_f1 + 0.5 * kl1_f1 (robust against KL1 neglect)
+-            score = 0.5 * val_macro_f1 + 0.5 * val_kl1_f1
+             log_parts.append(f"val/score={score:.4f}")
+ 
+-            if score > self.best_score:
++            if score > self.best_score and guard_ok:
+                 self.best_score = score
+                 self.best_qwk = val_qwk
+                 patience_counter = 0
+                 self._save(epoch, train_losses, val_metrics, tag="best")
+             else:
+                 patience_counter += 1
++                if score > self.best_score and not guard_ok:
++                    logger.warning(
++                        "Epoch %d: score %.4f would be a new best, but low-grade "
++                        "min recall %.3f (worst class idx %d) is below floor %.2f "
++                        "— not saving as 'best' this epoch.",
++                        epoch, score, val_low_grade_min_recall,
++                        int(val_metrics.get("low_grade_worst_class", -1)), floor,
++                    )
+ 
+             logger.info(" | ".join(log_parts))
+ 
+@@ -705,6 +754,8 @@
+             self.history["val_macro_f1"].append( val_metrics.get("macro_f1", float("nan")))
+             self.history["val_kl1_recall"].append(val_metrics.get("kl1_recall", float("nan")))
+             self.history["val_kl1_f1"].append(val_metrics.get("kl1_f1", float("nan")))
++            self.history["val_kl2_f1"].append(val_metrics.get("kl2_f1", float("nan")))
++            self.history["val_low_grade_min_recall"].append(val_metrics.get("low_grade_min_recall", float("nan")))
+             self.history["val_score"].append(score)
+             self.history["val_qwk"].append(      val_metrics.get("kappa",    float("nan")))
+             self.history["val_mae"].append(      val_metrics.get("mae",      float("nan")))
+diff --git a/metrics.py b/metrics.py
+--- a/metrics.py
++++ b/metrics.py
+@@ -216,9 +216,11 @@
+         "qwk":                quadratic_kappa(preds, l, num_classes),
+         # Class-specific metrics for low-grade boundary error analysis
+         "kl0_recall":         float(rec_per_class[0]) if num_classes > 0 else 0.0,
++        "kl0_f1":             float(f1_per_class[0])  if num_classes > 0 else 0.0,
+         "kl1_recall":         float(rec_per_class[1]) if num_classes > 1 else 0.0,
+         "kl1_f1":             float(f1_per_class[1])  if num_classes > 1 else 0.0,
+         "kl2_recall":         float(rec_per_class[2]) if num_classes > 2 else 0.0,
++        "kl2_f1":             float(f1_per_class[2])  if num_classes > 2 else 0.0,
+         # Key boundary error counts from 5x5 confusion matrix
+         "boundary_KL1_to_KL0": int(cm[1, 0]) if num_classes > 1 else 0,
+         "boundary_KL1_to_KL2": int(cm[1, 2]) if num_classes > 2 else 0,
+@@ -226,6 +228,23 @@
+         "boundary_KL2_to_KL1": int(cm[2, 1]) if num_classes > 2 else 0,
+     }
+ 
++    # Generalized regression guard, scoped to the demonstrated collapse-prone
++    # KL0/KL1/KL2 triangle rather than all 5 classes. KL3/KL4 are excluded on
++    # purpose: they have consistently high recall (>0.70) across every
++    # experiment run so far, and KL4's tiny support (51 test / 27 val samples)
++    # would make a global 5-class minimum noisy and prone to false alarms
++    # unrelated to the actual failure mode this guard exists to catch.
++    if num_classes > 2:
++        low_grade_recalls = rec_per_class[:3]
++        low_grade_f1s     = f1_per_class[:3]
++        metrics["low_grade_min_recall"] = float(low_grade_recalls.min())
++        metrics["low_grade_min_f1"]     = float(low_grade_f1s.min())
++        metrics["low_grade_worst_class"] = int(low_grade_recalls.argmin())
++    else:
++        metrics["low_grade_min_recall"] = 0.0
++        metrics["low_grade_min_f1"] = 0.0
++        metrics["low_grade_worst_class"] = -1
++
+     if fgbf_logits is not None:
+         fgbf_m = compute_fgbf_metrics(fgbf_logits, labels)
+         metrics.update(fgbf_m)
+diff --git a/losses.py b/losses.py
+--- a/losses.py
++++ b/losses.py
+@@ -31,13 +31,25 @@
+ from config import TrainingConfig
+ 
+ 
+-def compute_class_weights(samples, num_classes: int, beta: float = 0.999) -> torch.Tensor:
+-    """Class-Balanced weights (Cui et al. 2019) — gentler than raw inverse frequency."""
++def compute_class_weights(samples, num_classes: int, beta: float = 0.999,
++                           max_ratio: Optional[float] = 4.0) -> torch.Tensor:
++    """Class-Balanced weights (Cui et al. 2019) — gentler than raw inverse frequency.
++
++    max_ratio: if set, clips weights to [mean/max_ratio, mean*max_ratio] after
++    normalization, so the rarest class can't get an unbounded loss multiplier.
++    Matters when this loss is combined with a WeightedRandomSampler (see
++    dataset.py's sampler_power) — otherwise the two corrections compound and
++    over-boost minority classes at their neighbors' expense.
++    """
+     counts = Counter(s.kl for s in samples)
+     counts_t = torch.tensor([counts.get(i, 1) for i in range(num_classes)], dtype=torch.float)
+     effective_num = 1.0 - torch.pow(torch.tensor(beta), counts_t)
+     weights = (1.0 - beta) / effective_num
+-    return weights / weights.sum() * num_classes
++    weights = weights / weights.sum() * num_classes
++    if max_ratio is not None:
++        mean_w = weights.mean()
++        weights = torch.clamp(weights, min=mean_w / max_ratio, max=mean_w * max_ratio)
++    return weights
+ 
+ 
+ class FocalLoss(nn.Module):
+diff --git a/dataset.py b/dataset.py
+--- a/dataset.py
++++ b/dataset.py
+@@ -414,8 +414,15 @@
+     if split == "train" and getattr(cfg_train, "sampler", "none") == "weighted":
+         counts = Counter(s.kl for s in samples)
+ 
++        # sampler_power=1.0 -> full inverse-frequency (equalizes classes fully).
++        # sampler_power=0.5 -> softened (sqrt) rebalancing — use this when
++        # loss_type is already 'weighted_ce', to avoid double-correcting the
++        # same imbalance in both batch composition and the loss.
++        # sampler_power=0.0 -> uniform sampling (same as sampler='none').
++        power = getattr(cfg_train, "sampler_power", 1.0)
++
+         sample_weights = [
+-            1.0 / counts[s.kl]
++            1.0 / (counts[s.kl] ** power)
+             for s in samples
+         ]
+ 
