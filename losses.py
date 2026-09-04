@@ -79,8 +79,37 @@ class SoftQWKLoss(nn.Module):
         return (self.weight_matrix * O).sum() / ((self.weight_matrix * E).sum() + 1e-6)
 
 
+class CombinedOrdinalLoss(nn.Module):
+    """
+    Combined class-weighted CrossEntropy (70%) and SoftQWK surrogate loss (30%).
+    """
+    def __init__(
+        self,
+        ce_weight: float = 0.7,
+        qwk_weight: float = 0.3,
+        class_weights: Optional[torch.Tensor] = None,
+        num_classes: int = 5,
+        label_smoothing: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.ce_weight = ce_weight
+        self.qwk_weight = qwk_weight
+        self.num_classes = num_classes
+        self.ce_loss = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
+        self.qwk_loss = SoftQWKLoss(num_classes=num_classes)
+
+    @property
+    def weight(self) -> Optional[torch.Tensor]:
+        return self.ce_loss.weight
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        loss_ce = self.ce_loss(logits, targets)
+        loss_qwk = self.qwk_loss(logits, targets)
+        return self.ce_weight * loss_ce + self.qwk_weight * loss_qwk
+
+
 def build_primary_loss(loss_type: str, samples, num_classes: int, device) -> nn.Module:
-    """Factory for E1–E7's primary loss. loss_type: 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk'."""
+    """Factory for E1–E7's primary loss. loss_type: 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk' | 'ce_qwk'."""
     if loss_type == "ce":
         return nn.CrossEntropyLoss(label_smoothing=0.1)
     weights = compute_class_weights(samples, num_classes).to(device)
@@ -90,6 +119,13 @@ def build_primary_loss(loss_type: str, samples, num_classes: int, device) -> nn.
         return FocalLoss(alpha=weights, gamma=2.0, label_smoothing=0.1)
     if loss_type == "soft_qwk":
         return SoftQWKLoss(num_classes=num_classes)
+    if loss_type == "ce_qwk":
+        return CombinedOrdinalLoss(
+            ce_weight=0.7,
+            qwk_weight=0.3,
+            class_weights=weights,
+            num_classes=num_classes,
+        )
     raise ValueError(f"Unknown loss_type: {loss_type}")
 
 

@@ -318,10 +318,24 @@ class Trainer:
         if "fgbf_logits" in preds:
             kl_targets = labels["kl"]
             low_grade_mask = (kl_targets <= 2)
+
+            main_weight = getattr(self.loss_fn, "weight", None)
+            if main_weight is None and hasattr(self.loss_fn, "ce_loss"):
+                main_weight = getattr(self.loss_fn.ce_loss, "weight", None)
+            if main_weight is None:
+                main_weight = getattr(self.loss_fn, "alpha", None)  # FocalLoss stores weights here
+
+            if main_weight is not None and main_weight.numel() >= 3:
+                fgbf_weight = main_weight[:3]
+                fgbf_weight = fgbf_weight / fgbf_weight.mean()
+            else:
+                fgbf_weight = None
+
             if low_grade_mask.any():
                 fgbf_ce = F.cross_entropy(
                     preds["fgbf_logits"][low_grade_mask],
                     kl_targets[low_grade_mask],
+                    weight=fgbf_weight,
                 )
             else:
                 fgbf_ce = 0.0 * preds["fgbf_logits"].sum()
@@ -332,6 +346,19 @@ class Trainer:
             loss_dict["weighted_fgbf"] = w_fgbf * fgbf_ce
             loss_dict["weighted_fgbf_loss"] = w_fgbf * fgbf_ce
             loss_dict["total"] = loss_dict["total"] + w_fgbf * fgbf_ce
+
+        if "theta" in preds and getattr(self.tcfg, "stn_identity_reg_weight", 0.0) > 0:
+            theta = preds["theta"]
+            b_size = theta.shape[0]
+            identity_theta = torch.tensor(
+                [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                dtype=theta.dtype,
+                device=theta.device,
+            ).unsqueeze(0).expand(b_size, -1, -1)
+            stn_reg = F.mse_loss(theta, identity_theta)
+            w_stn = self.tcfg.stn_identity_reg_weight
+            loss_dict["stn_identity_reg"] = stn_reg
+            loss_dict["total"] = loss_dict["total"] + w_stn * stn_reg
 
         return loss_dict
 

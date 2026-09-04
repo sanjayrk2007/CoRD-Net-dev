@@ -195,6 +195,12 @@ def main() -> None:
     logger.info("  Sampler     : %s", cfg.training.sampler)
     logger.info("  Data root   : %s", cfg.training.data_root or "not set")
     logger.info("  Pretrained  : %s", cfg.model.pretrained)
+    if not cfg.model.pretrained:
+        logger.warning(
+            "WARNING: --pretrained flag is NOT set (cfg.model.pretrained is False). "
+            "Backbone weights will be trained from random initialization, which is "
+            "a likely source of instability on this dataset size. Consider passing --pretrained."
+        )
     logger.info("  Results dir : %s", args.results_dir)
     logger.info("═" * 62)
 

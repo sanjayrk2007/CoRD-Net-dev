@@ -126,7 +126,7 @@ class TrainingConfig:
                                       # Use < 1.0 when loss_type is already 'weighted_ce' to
                                       # avoid double-correcting the same imbalance.
     augmentation: str = "mild"       # 'standard' | 'mild' | 'none'
-    loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk'
+    loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk' | 'ce_qwk'
     # 'qwk' | 'kl1_only' | 'score'. Historical note: this field was declared
     # but never read by trainer.py before this patch, so every experiment run
     # so far (including e2_fgbf_pim_v2) actually used the 'kl1_only' formula
@@ -136,6 +136,7 @@ class TrainingConfig:
     low_grade_recall_floor: float = 0.30  # checkpoint guard (monitor="score" only):
                                            # don't save "best" if the weakest of
                                            # KL0/KL1/KL2 recall drops below this
+    stn_identity_reg_weight: float = 0.0   # STN affine matrix identity regularization weight (0.0 = disabled)
 
     # ── Dataset paths (set via CLI; no hardcoded paths) ───────────────────
     data_root: Optional[str] = None
@@ -313,6 +314,31 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         }
     ),
 
+    # v4 isolates the combined class-weighted + soft-QWK loss (loss_type="ce_qwk")
+    # on top of v3. All other settings (sampler_power=0.5, checkpoint_monitor="score",
+    # LR=1e-4, warmup=5) are kept identical to v3 so the effect of the loss function
+    # alone can be attributed without conflation.
+    "e2_fgbf_pim_v4": (
+        "E2 + FGBF + PIM-Lite Feature Block (v3 + combined CE/soft-QWK loss)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            **FGBF_FLAGS,
+        }
+    ),
+
+    # v5 isolates STN identity matrix regularization (stn_identity_reg_weight=0.01)
+    # on top of v4. Penalizes deviation of the affine transform matrix theta from
+    # identity [[1,0,0],[0,1,0]] to prevent aggressive or unstable spatial warping.
+    "e2_fgbf_pim_v5": (
+        "E2 + FGBF + PIM-Lite Feature Block (v4 + STN identity regularization)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            **FGBF_FLAGS,
+        }
+    ),
+
     "e2_fgbf_cbam": (
         "E2 + FGBF + CBAM-Lite Control Block",
         {
@@ -442,7 +468,7 @@ def get_config(
 
     # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
     if experiment in ("e2_fgbf_pim_v2", "e2_fgbf_pim_v3", "e2_fgbf_pim_v3b",
-                       "e2_fgbf_pim_v3c",
+                       "e2_fgbf_pim_v3c", "e2_fgbf_pim_v4", "e2_fgbf_pim_v5",
                        "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
@@ -450,7 +476,8 @@ def get_config(
     # v3: soften the sampler (avoid stacking two full corrections on the same
     # imbalance) and switch to the guarded composite monitor. Nothing else
     # changes vs v2 — see the registry comment above for why.
-    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b", "e2_fgbf_pim_v3c"):
+    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b", "e2_fgbf_pim_v3c",
+                       "e2_fgbf_pim_v4", "e2_fgbf_pim_v5"):
         train_cfg.sampler_power = 0.5
         train_cfg.checkpoint_monitor = "score"
 
@@ -467,6 +494,14 @@ def get_config(
     if experiment == "e2_fgbf_pim_v3c":
         train_cfg.learning_rate = 5e-5
         train_cfg.warmup_epochs = 8
+
+    # v4: isolated combined CE + soft-QWK loss (loss_type="ce_qwk") vs v3.
+    if experiment in ("e2_fgbf_pim_v4", "e2_fgbf_pim_v5"):
+        train_cfg.loss_type = "ce_qwk"
+
+    # v5: isolated STN identity regularization (stn_identity_reg_weight=0.01) vs v4.
+    if experiment == "e2_fgbf_pim_v5":
+        train_cfg.stn_identity_reg_weight = 0.01
 
     if device is not None:
         train_cfg.device = device
