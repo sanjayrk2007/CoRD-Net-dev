@@ -708,10 +708,10 @@ class Trainer:
             #                on whichever of KL0/KL1/KL2 is currently weakest,
             #                so improving one can't silently collapse another.
             monitor = getattr(self.tcfg, "checkpoint_monitor", "kl1_only")
+            min_epochs = getattr(self.tcfg, "min_epochs_before_early_stop", 15)
 
             if monitor == "score":
                 score = 0.4 * val_macro_f1 + 0.3 * val_kl1_f1 + 0.3 * val_kl2_f1
-                min_epochs = getattr(self.tcfg, "min_epochs_before_early_stop", 15)
                 floor = getattr(self.tcfg, "low_grade_recall_floor", 0.30)
                 # Exempt the warmup window: metrics are noisy before the model
                 # stabilizes, and this exemption guarantees at least one
@@ -733,7 +733,8 @@ class Trainer:
                 patience_counter = 0
                 self._save(epoch, train_losses, val_metrics, tag="best")
             else:
-                patience_counter += 1
+                if epoch >= min_epochs:
+                    patience_counter += 1
                 if score > self.best_score and not guard_ok:
                     logger.warning(
                         "Epoch %d: score %.4f would be a new best, but low-grade "
