@@ -847,6 +847,10 @@ class Trainer:
             val_fgbf_logits   = val_fgbf_logits,
             test_fgbf_logits  = test_fgbf_logits,
             train_fgbf_logits = train_fgbf_logits,
+            checkpoint_monitor = getattr(self.tcfg, "checkpoint_monitor", ""),
+            sampler_power      = getattr(self.tcfg, "sampler_power", float("nan")),
+            learning_rate      = self.tcfg.learning_rate,
+            warmup_epochs      = self.tcfg.warmup_epochs,
         )
 
     # ── Synthetic stub (run_experiment.py only) ───────────────────────────────

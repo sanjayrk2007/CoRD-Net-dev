@@ -400,9 +400,12 @@ def _save_metrics(
 
 _ABLATION_COLUMNS = [
     "experiment", "parameters",
+    "checkpoint_monitor", "sampler_power", "learning_rate", "warmup_epochs",
     "train_accuracy",
     "val_accuracy",   "val_macro_f1",   "val_qwk",   "val_mae",
+    "val_kl1_f1",     "val_kl2_f1",
     "test_accuracy",  "test_macro_f1",  "test_qwk",  "test_mae",
+    "test_kl1_f1",    "test_kl2_f1",
 ]
 
 def update_ablation_summary(
@@ -411,6 +414,10 @@ def update_ablation_summary(
     train_metrics: Dict[str, float],
     val_metrics:   Dict[str, float],
     test_metrics:  Dict[str, float],
+    checkpoint_monitor: str = "",
+    sampler_power:      float = float("nan"),
+    learning_rate:      float = float("nan"),
+    warmup_epochs:      int = -1,
     results_dir:   str = "results",
 ) -> None:
     """
@@ -425,15 +432,23 @@ def update_ablation_summary(
     row = {
         "experiment":    experiment,
         "parameters":    parameters,
+        "checkpoint_monitor": checkpoint_monitor,
+        "sampler_power":      sampler_power,
+        "learning_rate":      learning_rate,
+        "warmup_epochs":      warmup_epochs,
         "train_accuracy": train_metrics.get("accuracy", float("nan")),
         "val_accuracy":   val_metrics.get("accuracy",  float("nan")),
         "val_macro_f1":   val_metrics.get("macro_f1",  float("nan")),
         "val_qwk":        val_metrics.get("qwk",       float("nan")),
         "val_mae":        val_metrics.get("mae",        float("nan")),
+        "val_kl1_f1":     val_metrics.get("kl1_f1",     float("nan")),
+        "val_kl2_f1":     val_metrics.get("kl2_f1",     float("nan")),
         "test_accuracy":  test_metrics.get("accuracy", float("nan")),
         "test_macro_f1":  test_metrics.get("macro_f1", float("nan")),
         "test_qwk":       test_metrics.get("qwk",      float("nan")),
         "test_mae":       test_metrics.get("mae",       float("nan")),
+        "test_kl1_f1":    test_metrics.get("kl1_f1",    float("nan")),
+        "test_kl2_f1":    test_metrics.get("kl2_f1",    float("nan")),
     }
 
     # Read existing rows
@@ -620,6 +635,10 @@ def generate_all_reports(
     val_fgbf_logits: Optional[np.ndarray] = None,
     test_fgbf_logits: Optional[np.ndarray] = None,
     train_fgbf_logits: Optional[np.ndarray] = None,
+    checkpoint_monitor: str = "",
+    sampler_power:      float = float("nan"),
+    learning_rate:      float = float("nan"),
+    warmup_epochs:      int = -1,
 ) -> Dict[str, Dict[str, float]]:
     """
     Generate every output file for one experiment.
@@ -696,6 +715,10 @@ def generate_all_reports(
         train_metrics = train_metrics,
         val_metrics   = val_metrics,
         test_metrics  = test_metrics,
+        checkpoint_monitor = checkpoint_monitor,
+        sampler_power      = sampler_power,
+        learning_rate      = learning_rate,
+        warmup_epochs      = warmup_epochs,
         results_dir   = results_dir,
     )
 

@@ -90,10 +90,10 @@ class TrainingConfig:
     """Training loop, optimiser, and scheduler settings."""
 
     optimizer: str = "adamw"
-    learning_rate: float = 5e-5
+    learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     scheduler: str = "cosine"         # 'cosine' | 'step' | 'none'
-    warmup_epochs: int = 8
+    warmup_epochs: int = 5
 
     batch_size: int = 16
     epochs: int = 100
@@ -122,12 +122,16 @@ class TrainingConfig:
     patience: Optional[int] = None    # None = disable early stopping
 
     sampler: str = "none"            # 'none' | 'weighted'
-    sampler_power: float = 0.5       # 1.0=full inverse-freq, 0.5=sqrt-softened, 0.0=uniform.
+    sampler_power: float = 1.0       # 1.0=full inverse-freq, 0.5=sqrt-softened, 0.0=uniform.
                                       # Use < 1.0 when loss_type is already 'weighted_ce' to
                                       # avoid double-correcting the same imbalance.
     augmentation: str = "mild"       # 'standard' | 'mild' | 'none'
     loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk'
-    checkpoint_monitor: str = "score"
+    # 'qwk' | 'kl1_only' | 'score'. Historical note: this field was declared
+    # but never read by trainer.py before this patch, so every experiment run
+    # so far (including e2_fgbf_pim_v2) actually used the 'kl1_only' formula
+    # regardless of this value. Default corrected to match that reality.
+    checkpoint_monitor: str = "kl1_only"
     min_epochs_before_early_stop: int = 15
     low_grade_recall_floor: float = 0.30  # checkpoint guard (monitor="score" only):
                                            # don't save "best" if the weakest of
@@ -436,22 +440,33 @@ def get_config(
     model_cfg = ModelConfig(pretrained=pretrained, **flags)
     train_cfg = TrainingConfig()
 
-    # Default settings applied across all experiments
-    train_cfg.learning_rate = 5e-5
-    train_cfg.warmup_epochs = 8
-    train_cfg.sampler_power = 0.5
-    train_cfg.checkpoint_monitor = "score"
-
     # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
     if experiment in ("e2_fgbf_pim_v2", "e2_fgbf_pim_v3", "e2_fgbf_pim_v3b",
                        "e2_fgbf_pim_v3c",
-                       "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8") or experiment.endswith("_v3c"):
+                       "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
+
+    # v3: soften the sampler (avoid stacking two full corrections on the same
+    # imbalance) and switch to the guarded composite monitor. Nothing else
+    # changes vs v2 — see the registry comment above for why.
+    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b", "e2_fgbf_pim_v3c"):
+        train_cfg.sampler_power = 0.5
+        train_cfg.checkpoint_monitor = "score"
 
     # v3b: isolated follow-up, only run if v3 needs more help.
     if experiment == "e2_fgbf_pim_v3b":
         train_cfg.weight_decay = 2e-4
+
+    # v3c: isolated LR-stability follow-up — see registry comment above.
+    # Halve peak LR and extend warmup from 5 -> 8 epochs so the model
+    # spends more of its (patience-limited) real training window in the
+    # gentler regime that produced v3's epoch-4 peak, instead of jumping
+    # to and lingering at a peak LR the fused model can't hold a joint
+    # class balance at.
+    if experiment == "e2_fgbf_pim_v3c":
+        train_cfg.learning_rate = 5e-5
+        train_cfg.warmup_epochs = 8
 
     if device is not None:
         train_cfg.device = device
