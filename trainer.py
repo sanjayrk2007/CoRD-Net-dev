@@ -131,6 +131,8 @@ class Trainer:
         )
 
         self.model.to(self.device)
+        if hasattr(self.loss_fn, "to"):
+            self.loss_fn.to(self.device)
 
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
@@ -165,17 +167,36 @@ class Trainer:
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         name = self.tcfg.optimizer.lower()
+        base_lr = self.tcfg.learning_rate
+
+        backbone_params = []
+        module_params = []
+        head_params = []
+
+        for pname, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if "backbone" in pname:
+                backbone_params.append(param)
+            elif any(h in pname for h in ["classifier", "heads", "low_grade_head", "projector"]):
+                head_params.append(param)
+            else:
+                module_params.append(param)
+
         if name == "adamw":
-            return torch.optim.AdamW(
-                self.model.parameters(),
-                lr=self.tcfg.learning_rate,
-                weight_decay=self.tcfg.weight_decay,
-            )
+            param_groups = [
+                {"params": backbone_params, "lr": base_lr * 0.2, "weight_decay": 1e-2},
+                {"params": module_params,   "lr": base_lr * 1.0, "weight_decay": self.tcfg.weight_decay},
+                {"params": head_params,     "lr": base_lr * 2.5, "weight_decay": self.tcfg.weight_decay},
+            ]
+            return torch.optim.AdamW(param_groups)
         if name == "adam":
-            return torch.optim.Adam(
-                self.model.parameters(),
-                lr=self.tcfg.learning_rate,
-            )
+            param_groups = [
+                {"params": backbone_params, "lr": base_lr * 0.2},
+                {"params": module_params,   "lr": base_lr * 1.0},
+                {"params": head_params,     "lr": base_lr * 2.5},
+            ]
+            return torch.optim.Adam(param_groups)
         raise ValueError(
             f"Unknown optimizer '{self.tcfg.optimizer}'. Choose: adamw | adam"
         )

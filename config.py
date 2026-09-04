@@ -126,7 +126,7 @@ class TrainingConfig:
                                       # Use < 1.0 when loss_type is already 'weighted_ce' to
                                       # avoid double-correcting the same imbalance.
     augmentation: str = "mild"       # 'standard' | 'mild' | 'none'
-    loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk' | 'ce_qwk'
+    loss_type: str = "ce"            # 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk' | 'ce_qwk' | 'boundary_aware'
     # 'qwk' | 'kl1_only' | 'score'. Historical note: this field was declared
     # but never read by trainer.py before this patch, so every experiment run
     # so far (including e2_fgbf_pim_v2) actually used the 'kl1_only' formula
@@ -339,6 +339,17 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         }
     ),
 
+    # v6 combines STN identity regularization with BoundaryAwareLoss (CE + SoftQWK + Grade Distance)
+    # and stabilized learning rate (5e-5) with 8-epoch warmup.
+    "e2_fgbf_pim_v6": (
+        "E2 + FGBF + PIM-Lite Feature Block (Boundary-Aware Loss + STN Reg)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            **FGBF_FLAGS,
+        }
+    ),
+
     "e2_fgbf_cbam": (
         "E2 + FGBF + CBAM-Lite Control Block",
         {
@@ -469,7 +480,7 @@ def get_config(
     # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
     if experiment in ("e2_fgbf_pim_v2", "e2_fgbf_pim_v3", "e2_fgbf_pim_v3b",
                        "e2_fgbf_pim_v3c", "e2_fgbf_pim_v4", "e2_fgbf_pim_v5",
-                       "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
+                       "e2_fgbf_pim_v6", "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
 
@@ -477,7 +488,7 @@ def get_config(
     # imbalance) and switch to the guarded composite monitor. Nothing else
     # changes vs v2 — see the registry comment above for why.
     if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b", "e2_fgbf_pim_v3c",
-                       "e2_fgbf_pim_v4", "e2_fgbf_pim_v5"):
+                       "e2_fgbf_pim_v4", "e2_fgbf_pim_v5", "e2_fgbf_pim_v6"):
         train_cfg.sampler_power = 0.5
         train_cfg.checkpoint_monitor = "score"
 
@@ -502,6 +513,13 @@ def get_config(
     # v5: isolated STN identity regularization (stn_identity_reg_weight=0.01) vs v4.
     if experiment == "e2_fgbf_pim_v5":
         train_cfg.stn_identity_reg_weight = 0.01
+
+    # v6: combines stabilized LR, BoundaryAwareLoss (CE + SoftQWK + L1 grade dist), and STN reg.
+    if experiment == "e2_fgbf_pim_v6":
+        train_cfg.loss_type = "boundary_aware"
+        train_cfg.stn_identity_reg_weight = 0.015
+        train_cfg.learning_rate = 5e-5
+        train_cfg.warmup_epochs = 8
 
     if device is not None:
         train_cfg.device = device

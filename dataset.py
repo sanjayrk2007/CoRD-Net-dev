@@ -126,7 +126,12 @@ class OAIDataset(Dataset):
                 f"Image not found: {path}\n"
                 "Check that your --data-root is correct."
             )
-        return self.transform(Image.open(path).convert("L"))
+        img = Image.open(path).convert("L")
+        # Anatomical canonicalization: flip Right knees horizontally so the medial
+        # compartment is consistently on the image-right across the entire dataset.
+        if path.stem.upper().endswith("R"):
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        return self.transform(img)
 
     def __getitem__(
         self, idx: int

@@ -127,7 +127,7 @@ def parse_args() -> argparse.Namespace:
         "--loss-type",
         type=str,
         default=None,
-        choices=["ce", "weighted_ce", "focal", "soft_qwk"],
+        choices=["ce", "weighted_ce", "focal", "soft_qwk", "ce_qwk", "boundary_aware"],
         help="Primary-head loss (default: from config)"
     )
     p.add_argument(

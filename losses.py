@@ -70,13 +70,14 @@ class SoftQWKLoss(nn.Module):
         i, j = torch.meshgrid(torch.arange(num_classes), torch.arange(num_classes), indexing="ij")
         self.register_buffer("weight_matrix", ((i - j) ** 2).float())
 
-    def forward(self, logits, targets):
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         probs = torch.softmax(logits, dim=1)
         targets_onehot = F.one_hot(targets, probs.size(1)).float()
         O = probs.T @ targets_onehot
         hist_pred, hist_true = probs.sum(0), targets_onehot.sum(0)
         E = torch.outer(hist_pred, hist_true) / probs.size(0)
-        return (self.weight_matrix * O).sum() / ((self.weight_matrix * E).sum() + 1e-6)
+        weight_mat = self.weight_matrix.to(logits.device)
+        return (weight_mat * O).sum() / ((weight_mat * E).sum() + 1e-6)
 
 
 class CombinedOrdinalLoss(nn.Module):
@@ -108,24 +109,72 @@ class CombinedOrdinalLoss(nn.Module):
         return self.ce_weight * loss_ce + self.qwk_weight * loss_qwk
 
 
+class BoundaryAwareLoss(nn.Module):
+    """
+    Boundary-aware ordinal loss combining class-weighted CrossEntropy (50%),
+    SoftQWK surrogate (30%), and Expected Continuous Grade Distance (20%).
+    Penalizes adjacent-grade boundary slips more heavily than standard CE.
+    """
+    def __init__(
+        self,
+        ce_weight: float = 0.5,
+        qwk_weight: float = 0.3,
+        dist_weight: float = 0.2,
+        class_weights: Optional[torch.Tensor] = None,
+        num_classes: int = 5,
+        label_smoothing: float = 0.08,
+    ) -> None:
+        super().__init__()
+        self.ce_weight = ce_weight
+        self.qwk_weight = qwk_weight
+        self.dist_weight = dist_weight
+        self.num_classes = num_classes
+        self.ce_loss = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
+        self.qwk_loss = SoftQWKLoss(num_classes=num_classes)
+
+    @property
+    def weight(self) -> Optional[torch.Tensor]:
+        return self.ce_loss.weight
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        loss_ce = self.ce_loss(logits, targets)
+        loss_qwk = self.qwk_loss(logits, targets)
+
+        # Expected ordinal grade distance penalty
+        probs = F.softmax(logits, dim=1)
+        grades = torch.arange(self.num_classes, device=logits.device, dtype=torch.float)
+        expected_grade = (probs * grades).sum(dim=1)
+        loss_dist = F.l1_loss(expected_grade, targets.float())
+
+        return self.ce_weight * loss_ce + self.qwk_weight * loss_qwk + self.dist_weight * loss_dist
+
+
 def build_primary_loss(loss_type: str, samples, num_classes: int, device) -> nn.Module:
-    """Factory for E1–E7's primary loss. loss_type: 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk' | 'ce_qwk'."""
-    if loss_type == "ce":
-        return nn.CrossEntropyLoss(label_smoothing=0.1)
+    """Factory for E1–E7's primary loss. loss_type: 'ce' | 'weighted_ce' | 'focal' | 'soft_qwk' | 'ce_qwk' | 'boundary_aware'."""
     weights = compute_class_weights(samples, num_classes).to(device)
+    if loss_type == "ce":
+        return nn.CrossEntropyLoss(label_smoothing=0.1).to(device)
     if loss_type == "weighted_ce":
-        return nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1)
+        return nn.CrossEntropyLoss(weight=weights, label_smoothing=0.1).to(device)
     if loss_type == "focal":
-        return FocalLoss(alpha=weights, gamma=2.0, label_smoothing=0.1)
+        return FocalLoss(alpha=weights, gamma=2.0, label_smoothing=0.1).to(device)
     if loss_type == "soft_qwk":
-        return SoftQWKLoss(num_classes=num_classes)
+        return SoftQWKLoss(num_classes=num_classes).to(device)
     if loss_type == "ce_qwk":
         return CombinedOrdinalLoss(
             ce_weight=0.7,
             qwk_weight=0.3,
             class_weights=weights,
             num_classes=num_classes,
-        )
+        ).to(device)
+    if loss_type == "boundary_aware":
+        return BoundaryAwareLoss(
+            ce_weight=0.5,
+            qwk_weight=0.3,
+            dist_weight=0.2,
+            class_weights=weights,
+            num_classes=num_classes,
+        ).to(device)
     raise ValueError(f"Unknown loss_type: {loss_type}")
 
 
