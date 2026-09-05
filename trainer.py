@@ -215,19 +215,30 @@ class Trainer:
                 start_factor=0.1,
             )
 
+        # Expected run horizon: when patience-based early stopping is configured,
+        # tie decay horizon to min_epochs + patience so LR reaches genuinely low
+        # value before patience can trigger.
+        if getattr(self.tcfg, "patience", None) is not None:
+            min_epochs = getattr(self.tcfg, "min_epochs_before_early_stop", 15)
+            horizon = min(self.tcfg.epochs, min_epochs + self.tcfg.patience)
+        else:
+            horizon = self.tcfg.epochs
+
+        decay_epochs = max(1, horizon - warmup_epochs)
+
         if name == "cosine":
             if warmup_epochs > 0:
                 warmup = torch.optim.lr_scheduler.LinearLR(
                     self.optimizer, start_factor=0.1, total_iters=warmup_epochs
                 )
                 main_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-                    self.optimizer, T_max=max(1, self.tcfg.epochs - warmup_epochs)
+                    self.optimizer, T_max=decay_epochs
                 )
                 return torch.optim.lr_scheduler.SequentialLR(
                     self.optimizer, schedulers=[warmup, main_sched], milestones=[warmup_epochs]
                 )
             return torch.optim.lr_scheduler.CosineAnnealingLR(
-                self.optimizer, T_max=self.tcfg.epochs
+                self.optimizer, T_max=decay_epochs
             )
 
         if name == "step":

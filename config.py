@@ -318,15 +318,13 @@ def get_config(
     # From e3 onward (except untuned ablations), default to class-balanced loss and sampler
     if experiment in ("e3", "e3_fgbf", "e4", "e5"):
         train_cfg.loss_type = "weighted_ce"
-        train_cfg.sampler = "weighted"
-        train_cfg.sampler_power = 0.5
+        train_cfg.sampler = "none"
         train_cfg.checkpoint_monitor = "score"
 
     # e2_fgbf_pim_v6: tuned recipe (BoundaryAwareLoss, STN identity reg, stabilized LR and warmup)
     if experiment == "e2_fgbf_pim_v6":
         train_cfg.loss_type = "boundary_aware"
-        train_cfg.sampler = "weighted"
-        train_cfg.sampler_power = 0.5
+        train_cfg.sampler = "none"
         train_cfg.checkpoint_monitor = "score"
         train_cfg.stn_identity_reg_weight = 0.015
         train_cfg.learning_rate = 5e-5
