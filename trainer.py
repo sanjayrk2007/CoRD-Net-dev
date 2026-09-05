@@ -30,7 +30,6 @@ import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
 
 from collections import defaultdict
-import numpy as np
 
 from config import Config
 from losses import MultiTaskLoss

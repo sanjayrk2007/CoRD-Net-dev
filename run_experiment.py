@@ -10,7 +10,7 @@ in models/ and trainer.py.
 Usage
 -----
     python run_experiment.py --exp e1
-    python run_experiment.py --exp e8 --steps 5 --batch-size 2
+    python run_experiment.py --exp e5 --steps 5 --batch-size 2
     python run_experiment.py --exp all
 """
 
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Experiments that need >1 crop forward (E4+): DRPNet handles this internally,
 # but the stub uses 112 px to stay within CPU memory limits.
-_HEAVY_EXPS = {"e4", "e5", "e6", "e7", "e8"}
+_HEAVY_EXPS = {"e4", "e5"}
 
 
 def run_one(exp: str, args: argparse.Namespace) -> None:
@@ -54,7 +54,7 @@ def run_one(exp: str, args: argparse.Namespace) -> None:
 
     model = DRPNet(cfg.model).to(device)
 
-    # Use MultiTaskLoss for E8 (aux heads), CrossEntropy for E1–E7
+    # Use MultiTaskLoss for aux heads, CrossEntropy for standard models
     if cfg.model.use_aux_heads:
         loss_fn = MultiTaskLoss(cfg.training)
     else:
@@ -79,7 +79,7 @@ def main() -> None:
         choices=[*EXPERIMENT_NAMES.keys(), "all"],
         default="all",
         metavar="EXP",
-        help="Experiment: e1 … e8  or  all  (default: all)",
+        help="Experiment: e1 … e5, e3_fgbf, e2_fgbf_pim_v6  or  all  (default: all)",
     )
     parser.add_argument("--batch-size", type=int, default=4, metavar="B")
     parser.add_argument("--steps",      type=int, default=3, metavar="N",

@@ -46,7 +46,7 @@ class ModelConfig:
     in_channels: int = 3
 
     # STN (E2)
-    stn_img_size: int = 512
+    stn_img_size: int = 299
 
     # Compartments (E4)
     compartment_overlap: float = 0.10
@@ -69,6 +69,9 @@ class ModelConfig:
     fgbf_loss_weight: float = 0.15
     fgbf_fuse_main: bool = False
     fgbf_block: str = "baseline"
+
+    skip_fixed_clahe_if_dual_intensity: bool = True
+    kaggle_priority: Optional[int] = None
 
     # Ablation flags — set by get_config(experiment)
     use_stn: bool = False
@@ -180,10 +183,15 @@ FGBF_FLAGS: Dict[str, any] = {
     "fgbf_fuse_main": True,
 }
 
+# Note: Intermediate ablation/debugging keys (e2m, e1_fgbf, e2_fgbf, e2_fgbf_ms,
+# e2_fgbf_sk, e2_fgbf_pim_v2-v5, e6, e7, e8) have been trimmed from the active
+# registry and are recoverable from git log history for config.py if needed.
 _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
     "e1": (
         "Baseline ConvNeXt",
-        {}
+        {
+            "kaggle_priority": 1,
+        }
     ),
 
     "e2": (
@@ -191,53 +199,26 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         {
             "use_stn": True,
             "use_dual_intensity": False,
+            "kaggle_priority": None,
         }
     ),
 
-    "e2m": (
-        "E2 + Mild Augmentation",
+    "e3": (
+        "E2 + Dual-Intensity Stem",
         {
             "use_stn": True,
-            "use_dual_intensity": False,
-        }
-    ),
-    "e1_fgbf": (
-        "E1 + Fine-Grained Boundary Feature Module",
-        {
-            "use_stn": False,
-            "use_dual_intensity": False,
-            "use_fgbf": True,
-            "fgbf_block": "baseline",
+            "use_dual_intensity": True,
+            "kaggle_priority": None,
         }
     ),
 
-    "e2_fgbf": (
-        "E2 + Fine-Grained Boundary Feature Module",
+    "e3_fgbf": (
+        "E3 + Fine-Grained Boundary Feature Module",
         {
             "use_stn": True,
-            "use_dual_intensity": False,
-            "use_fgbf": True,
-            "fgbf_block": "baseline",
-        }
-    ),
-
-    "e2_fgbf_ms": (
-        "E2 + FGBF + Multi-Scale Feature Block",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            "use_fgbf": True,
-            "fgbf_block": "multiscale",
-        }
-    ),
-
-    "e2_fgbf_sk": (
-        "E2 + FGBF + Selective Kernel Feature Block",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            "use_fgbf": True,
-            "fgbf_block": "sk",
+            "use_dual_intensity": True,
+            **FGBF_FLAGS,
+            "kaggle_priority": 2,
         }
     ),
 
@@ -248,105 +229,18 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "use_dual_intensity": False,
             "use_fgbf": True,
             "fgbf_block": "pim",
+            "fgbf_fuse_main": False,
+            "kaggle_priority": None,
         }
     ),
 
-    "e2_fgbf_pim_v2": (
-        "E2 + FGBF + PIM-Lite Feature Block (Fused)",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    # v2 result: KL1 recall 0.44/0.42 (val/test) but KL2 recall regressed to
-    # 0.43/0.39 (was ~0.60 unfused) — the sampler (raw inverse-freq) and
-    # weighted_ce loss were both fully correcting the same imbalance at once,
-    # over-boosting KL1 at its neighbors' expense. v3 isolates exactly two
-    # changes vs v2: soften the sampler (sampler_power) and switch to the
-    # guarded composite checkpoint monitor. fgbf_loss_weight and weight_decay
-    # are deliberately left at v2's values so any change in outcome can be
-    # attributed to these two fixes alone, not conflated with other knobs.
-    "e2_fgbf_pim_v3": (
-        "E2 + FGBF + PIM-Lite Feature Block (Fused, softened rebalance)",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    # Follow-up only — run after v3, and only if v3 alone doesn't fully
-    # resolve the KL1/KL2 trade-off. Adds weight_decay on top of v3 in
-    # isolation so its effect isn't conflated with the sampler/monitor fix.
-    "e2_fgbf_pim_v3b": (
-        "E2 + FGBF + PIM-Lite Feature Block (v3 + higher weight decay)",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    # v3 result: best_score peaked at epoch 4 (lr=6.4e-5, still ramping
-    # through warmup) and was never beaten again in 20 further epochs.
-    # Per-epoch log shows why: LR hits its cosine peak (1e-4) at epoch 6
-    # and stays within ~10% of peak for the rest of the run (T_max=55 vs.
-    # a patience-limited real run length of ~24 epochs — the schedule
-    # never gets far enough into its decay to matter). Epoch 10 shows an
-    # outright collapse (score 0.19, kappa 0.36) at near-peak LR, and
-    # KL1 F1 *does* clear epoch 4's value more than once later on
-    # (epochs 13/17/19), but always at KL0's or KL2's expense — the
-    # model keeps sliding between class-biased optima instead of holding
-    # a joint balance, consistent with LR staying too high for too long
-    # rather than a validation-noise artifact. v3c isolates exactly two
-    # changes vs v3: halve the peak LR and extend warmup so more of the
-    # run happens in the gentler, epoch-4-like regime. sampler_power and
-    # checkpoint_monitor are kept at v3's values so any change in outcome
-    # is attributable to the LR schedule alone.
-    "e2_fgbf_pim_v3c": (
-        "E2 + FGBF + PIM-Lite Feature Block (v3 + stabilized LR schedule)",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    # v4 isolates the combined class-weighted + soft-QWK loss (loss_type="ce_qwk")
-    # on top of v3. All other settings (sampler_power=0.5, checkpoint_monitor="score",
-    # LR=1e-4, warmup=5) are kept identical to v3 so the effect of the loss function
-    # alone can be attributed without conflation.
-    "e2_fgbf_pim_v4": (
-        "E2 + FGBF + PIM-Lite Feature Block (v3 + combined CE/soft-QWK loss)",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    # v5 isolates STN identity matrix regularization (stn_identity_reg_weight=0.01)
-    # on top of v4. Penalizes deviation of the affine transform matrix theta from
-    # identity [[1,0,0],[0,1,0]] to prevent aggressive or unstable spatial warping.
-    "e2_fgbf_pim_v5": (
-        "E2 + FGBF + PIM-Lite Feature Block (v4 + STN identity regularization)",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    # v6 combines STN identity regularization with BoundaryAwareLoss (CE + SoftQWK + Grade Distance)
-    # and stabilized learning rate (5e-5) with 8-epoch warmup.
     "e2_fgbf_pim_v6": (
         "E2 + FGBF + PIM-Lite Feature Block (Boundary-Aware Loss + STN Reg)",
         {
             "use_stn": True,
             "use_dual_intensity": False,
             **FGBF_FLAGS,
+            "kaggle_priority": 3,
         }
     ),
 
@@ -357,29 +251,10 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "use_dual_intensity": False,
             "use_fgbf": True,
             "fgbf_block": "cbam",
+            "kaggle_priority": None,
         }
     ),
 
-    # Separate ablation only
-    "e3": (
-        "E2 + Dual-Intensity Stem",
-        {
-            "use_stn": True,
-            "use_dual_intensity": True,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    "e3_fgbf": (
-        "E3 + Fine-Grained Boundary Feature Module",
-        {
-            "use_stn": True,
-            "use_dual_intensity": True,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    # Main progression starts from E2, NOT E3
     "e4": (
         "E2 + Compartment Branches",
         {
@@ -387,6 +262,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "use_dual_intensity": False,
             "use_compartment": True,
             **FGBF_FLAGS,
+            "kaggle_priority": None,
         }
     ),
 
@@ -398,45 +274,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "use_compartment": True,
             "use_drp": True,
             **FGBF_FLAGS,
-        }
-    ),
-
-    "e6": (
-        "E5 + Prototype-Guided Refinement",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            "use_compartment": True,
-            "use_drp": True,
-            "use_pgr": True,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    "e7": (
-        "E6 + Relational Token Coupling",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            "use_compartment": True,
-            "use_drp": True,
-            "use_pgr": True,
-            "use_rtc": True,
-            **FGBF_FLAGS,
-        }
-    ),
-
-    "e8": (
-        "E7 + Auxiliary Heads",
-        {
-            "use_stn": True,
-            "use_dual_intensity": False,
-            "use_compartment": True,
-            "use_drp": True,
-            "use_pgr": True,
-            "use_rtc": True,
-            "use_aux_heads": True,
-            **FGBF_FLAGS,
+            "kaggle_priority": None,
         }
     ),
 }
@@ -467,7 +305,7 @@ def get_config(
     data_root: Optional[str] = None,
     metadata_csv: Optional[str] = None,
 ) -> Config:
-    """Return a fully-merged Config for *experiment* (e1 … e8, e2_fgbf, e3_fgbf)."""
+    """Return a fully-merged Config for *experiment*."""
     if experiment not in _EXPERIMENT_FLAGS:
         raise ValueError(
             f"Unknown experiment '{experiment}'. "
@@ -477,46 +315,19 @@ def get_config(
     model_cfg = ModelConfig(pretrained=pretrained, **flags)
     train_cfg = TrainingConfig()
 
-    # From e2_fgbf_pim_v2 onward, default to class-balanced loss and sampler
-    if experiment in ("e2_fgbf_pim_v2", "e2_fgbf_pim_v3", "e2_fgbf_pim_v3b",
-                       "e2_fgbf_pim_v3c", "e2_fgbf_pim_v4", "e2_fgbf_pim_v5",
-                       "e2_fgbf_pim_v6", "e3", "e3_fgbf", "e4", "e5", "e6", "e7", "e8"):
+    # From e3 onward (except untuned ablations), default to class-balanced loss and sampler
+    if experiment in ("e3", "e3_fgbf", "e4", "e5"):
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
-
-    # v3: soften the sampler (avoid stacking two full corrections on the same
-    # imbalance) and switch to the guarded composite monitor. Nothing else
-    # changes vs v2 — see the registry comment above for why.
-    if experiment in ("e2_fgbf_pim_v3", "e2_fgbf_pim_v3b", "e2_fgbf_pim_v3c",
-                       "e2_fgbf_pim_v4", "e2_fgbf_pim_v5", "e2_fgbf_pim_v6"):
         train_cfg.sampler_power = 0.5
         train_cfg.checkpoint_monitor = "score"
 
-    # v3b: isolated follow-up, only run if v3 needs more help.
-    if experiment == "e2_fgbf_pim_v3b":
-        train_cfg.weight_decay = 2e-4
-
-    # v3c: isolated LR-stability follow-up — see registry comment above.
-    # Halve peak LR and extend warmup from 5 -> 8 epochs so the model
-    # spends more of its (patience-limited) real training window in the
-    # gentler regime that produced v3's epoch-4 peak, instead of jumping
-    # to and lingering at a peak LR the fused model can't hold a joint
-    # class balance at.
-    if experiment == "e2_fgbf_pim_v3c":
-        train_cfg.learning_rate = 5e-5
-        train_cfg.warmup_epochs = 8
-
-    # v4: isolated combined CE + soft-QWK loss (loss_type="ce_qwk") vs v3.
-    if experiment in ("e2_fgbf_pim_v4", "e2_fgbf_pim_v5"):
-        train_cfg.loss_type = "ce_qwk"
-
-    # v5: isolated STN identity regularization (stn_identity_reg_weight=0.01) vs v4.
-    if experiment == "e2_fgbf_pim_v5":
-        train_cfg.stn_identity_reg_weight = 0.01
-
-    # v6: combines stabilized LR, BoundaryAwareLoss (CE + SoftQWK + L1 grade dist), and STN reg.
+    # e2_fgbf_pim_v6: tuned recipe (BoundaryAwareLoss, STN identity reg, stabilized LR and warmup)
     if experiment == "e2_fgbf_pim_v6":
         train_cfg.loss_type = "boundary_aware"
+        train_cfg.sampler = "weighted"
+        train_cfg.sampler_power = 0.5
+        train_cfg.checkpoint_monitor = "score"
         train_cfg.stn_identity_reg_weight = 0.015
         train_cfg.learning_rate = 5e-5
         train_cfg.warmup_epochs = 8

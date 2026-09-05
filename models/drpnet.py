@@ -261,7 +261,14 @@ class DRPNet(nn.Module):
             if want_debug_crops:
                 out["_debug_stn_crop"] = global_crop.detach()
 
-            # ^ .clone() ensures the view is not shared with the graph leaf
+            # Resize localized output from native STN resolution to backbone image_size
+            if global_crop.shape[-2:] != (self.cfg.image_size, self.cfg.image_size):
+                global_crop = F.interpolate(
+                    global_crop,
+                    size=(self.cfg.image_size, self.cfg.image_size),
+                    mode="bilinear",
+                    align_corners=False,
+                )
 
         # ── Backbone: encode global crop (one pass, reused by E4, E5, FGBF) ─
         global_spatial, global_pooled = self._encode_single(global_crop)

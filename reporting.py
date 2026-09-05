@@ -79,7 +79,7 @@ class ResultsWriter:
 
     Parameters
     ----------
-    experiment:  Experiment tag, e.g. 'e8'.
+    experiment:  Experiment tag, e.g. 'e1', 'e3_fgbf', 'e2_fgbf_pim_v6'.
     results_dir: Root results directory (default 'results').
     """
 

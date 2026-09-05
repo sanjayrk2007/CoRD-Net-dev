@@ -4,18 +4,18 @@ predict.py
 Inference script for CoRD-Net.
 
 Loads a checkpoint and predicts KL grade for a single image or every
-image in a directory.  Works with any experiment (E1–E8).
+image in a directory.  Works with any experiment.
 
 Usage
 -----
 Single image:
-    python predict.py --checkpoint checkpoints/e8_best.pt \\
-                      --exp e8 \\
+    python predict.py --checkpoint checkpoints/e3_fgbf_best.pt \\
+                      --exp e3_fgbf \\
                       --input knee.png
 
 Directory:
-    python predict.py --checkpoint checkpoints/e8_best.pt \\
-                      --exp e8 \\
+    python predict.py --checkpoint checkpoints/e3_fgbf_best.pt \\
+                      --exp e3_fgbf \\
                       --input /data/OAI/images/ \\
                       --output predictions.csv
 """

@@ -162,9 +162,10 @@ class FineGrainedBoundaryFeatureModule(nn.Module):
         attn_input = torch.cat([reduced_features, x_grid], dim=1)  # (B, 257, H, W)
         attn_logits = self.attn_net(attn_input)  # (B, 2, H, W)
 
-        # Apply spatial priors: left-side bias (-x_grid) for medial, right-side bias (x_grid) for lateral
-        medial_prior = -x_grid  # High on left (x < 0)
-        lateral_prior = x_grid  # High on right (x > 0)
+        # Apply spatial priors: right-side bias (x_grid) for medial, left-side bias (-x_grid) for lateral.
+        # Dependent on dataset.py's canonicalization (medial is consistently on image-right).
+        medial_prior = x_grid   # High on right (x > 0)
+        lateral_prior = -x_grid  # High on left (x < 0)
         spatial_priors = torch.cat([medial_prior, lateral_prior], dim=1)  # (B, 2, H, W)
 
         biased_logits = attn_logits + self.prior_scale * spatial_priors

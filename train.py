@@ -4,9 +4,9 @@ train.py
 Main training entry point for CoRD-Net.
 
     python train.py --exp e1 --data-root /data/OAI
-    python train.py --exp e8 --data-root /data/OAI --metadata-csv /data/OAI/labels.csv
+    python train.py --exp e3_fgbf --data-root /data/OAI --metadata-csv /data/OAI/labels.csv
     python train.py --exp e5 --data-root /data/OAI --pretrained --device cuda
-    python train.py --exp e6 --data-root /data/OAI --resume checkpoints/e6_best.pt
+    python train.py --exp e2_fgbf_pim_v6 --data-root /data/OAI --resume checkpoints/e2_fgbf_pim_v6_best.pt
 
 After training completes, results are automatically written to
 results/<experiment>/ (confusion matrices, classification reports,
@@ -23,12 +23,15 @@ import json
 from pathlib import Path
 import numpy as np
 
-from config import get_config, EXPERIMENT_NAMES
+import torch
+import torch.nn as nn
+
+from config import Config, EXPERIMENT_NAMES, get_config
 from dataset import build_loaders, build_test_loader
-from metrics import compute_per_class_metrics
+from metrics import compute_per_class_metrics, evaluate, get_predictions
 from models.drpnet import DRPNet
 from trainer import Trainer
-from utils import get_device, seed_everything, setup_logging
+from utils import seed_everything, setup_logging
 
 logger = logging.getLogger(__name__)
 

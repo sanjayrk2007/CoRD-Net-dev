@@ -16,8 +16,8 @@ all existing metrics are never altered.
 Usage
 -----
     # Evaluate both val and test, write full reports
-    python evaluate.py --checkpoint checkpoints/e8_best.pt \\
-                       --exp e8 \\
+    python evaluate.py --checkpoint checkpoints/e3_fgbf_best.pt \\
+                       --exp e3_fgbf \\
                        --data-root /data/OAI
 
     # Evaluate test split only

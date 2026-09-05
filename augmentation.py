@@ -56,28 +56,40 @@ class AddGaussianNoise:
 
 def get_mild_train_transforms(cfg: ModelConfig) -> transforms.Compose:
     """Return mild training augmentation pipeline."""
-    return transforms.Compose([
-        CLAHE(clip_limit=2.0),
+    target_size = cfg.stn_img_size if cfg.use_stn else cfg.image_size
+    skip_clahe = cfg.use_dual_intensity and getattr(cfg, "skip_fixed_clahe_if_dual_intensity", True)
+
+    t_list = []
+    if not skip_clahe:
+        t_list.append(CLAHE(clip_limit=2.0))
+    t_list.extend([
         transforms.RandomRotation(degrees=5),
         transforms.RandomAffine(degrees=0, translate=(0.03, 0.03), scale=(0.95, 1.05)),
         GrayToRGB(),
         transforms.ColorJitter(brightness=0.08, contrast=0.08),
-        transforms.Resize((cfg.image_size, cfg.image_size)),
+        transforms.Resize((target_size, target_size)),
         transforms.ToTensor(),
         AddGaussianNoise(sigma_min=0.005, sigma_max=0.015),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
+    return transforms.Compose(t_list)
 
 
 def get_none_train_transforms(cfg: ModelConfig) -> transforms.Compose:
     """Return clean / no-augmentation pipeline for training."""
-    return transforms.Compose([
-        CLAHE(clip_limit=2.0),
+    target_size = cfg.stn_img_size if cfg.use_stn else cfg.image_size
+    skip_clahe = cfg.use_dual_intensity and getattr(cfg, "skip_fixed_clahe_if_dual_intensity", True)
+
+    t_list = []
+    if not skip_clahe:
+        t_list.append(CLAHE(clip_limit=2.0))
+    t_list.extend([
         GrayToRGB(),
-        transforms.Resize((cfg.image_size, cfg.image_size)),
+        transforms.Resize((target_size, target_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
+    return transforms.Compose(t_list)
 
 
 def get_train_transforms(cfg: ModelConfig, mode: str = "standard") -> transforms.Compose:
@@ -86,28 +98,41 @@ def get_train_transforms(cfg: ModelConfig, mode: str = "standard") -> transforms
         return get_mild_train_transforms(cfg)
     if mode == "none":
         return get_none_train_transforms(cfg)
-    return transforms.Compose([
-        CLAHE(clip_limit=2.0),
+
+    target_size = cfg.stn_img_size if cfg.use_stn else cfg.image_size
+    skip_clahe = cfg.use_dual_intensity and getattr(cfg, "skip_fixed_clahe_if_dual_intensity", True)
+
+    t_list = []
+    if not skip_clahe:
+        t_list.append(CLAHE(clip_limit=2.0))
+    t_list.extend([
         transforms.RandomRotation(degrees=10),
         transforms.RandomAffine(degrees=0, translate=(0.05, 0.05),
                                 scale=(0.9, 1.1)),
         GrayToRGB(),
         transforms.ColorJitter(brightness=0.15, contrast=0.15),
-        transforms.Resize((cfg.image_size, cfg.image_size)),
+        transforms.Resize((target_size, target_size)),
         transforms.ToTensor(),
         AddGaussianNoise(sigma_min=0.01, sigma_max=0.03),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),
     ])
+    return transforms.Compose(t_list)
 
 
 def get_val_transforms(cfg: ModelConfig) -> transforms.Compose:
     """Return the validation / test transform pipeline from cfg."""
-    return transforms.Compose([
-        CLAHE(clip_limit=2.0),
+    target_size = cfg.stn_img_size if cfg.use_stn else cfg.image_size
+    skip_clahe = cfg.use_dual_intensity and getattr(cfg, "skip_fixed_clahe_if_dual_intensity", True)
+
+    t_list = []
+    if not skip_clahe:
+        t_list.append(CLAHE(clip_limit=2.0))
+    t_list.extend([
         GrayToRGB(),
-        transforms.Resize((cfg.image_size, cfg.image_size)),
+        transforms.Resize((target_size, target_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),
     ])
+    return transforms.Compose(t_list)

@@ -77,53 +77,49 @@ _SPECS: Dict[str, ExpectedSpec] = {
         loss_keys               = {"kl", "total"},
         grad_modules            = ["localizer", "stem", "backbone_features", "classifier"],
     ),
-    "e4": ExpectedSpec(
-        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment"},
-        output_keys_always      = {"logits", "theta"},
+    "e3_fgbf": ExpectedSpec(
+        active_flags            = {"use_stn", "use_dual_intensity", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
         output_keys_conditional = set(),
         loss_keys               = {"kl", "total"},
-        grad_modules            = ["localizer", "stem", "backbone_features",
+        grad_modules            = ["localizer", "stem", "backbone_features", "fgbf", "classifier"],
+    ),
+    "e2_fgbf_pim": ExpectedSpec(
+        active_flags            = {"use_stn", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
+        output_keys_conditional = set(),
+        loss_keys               = {"kl", "total"},
+        grad_modules            = ["localizer", "backbone_features", "classifier"],
+    ),
+    "e2_fgbf_pim_v6": ExpectedSpec(
+        active_flags            = {"use_stn", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
+        output_keys_conditional = set(),
+        loss_keys               = {"kl", "total"},
+        grad_modules            = ["localizer", "backbone_features", "fgbf", "classifier"],
+    ),
+    "e2_fgbf_cbam": ExpectedSpec(
+        active_flags            = {"use_stn", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
+        output_keys_conditional = set(),
+        loss_keys               = {"kl", "total"},
+        grad_modules            = ["localizer", "backbone_features", "classifier"],
+    ),
+    "e4": ExpectedSpec(
+        active_flags            = {"use_stn", "use_compartment", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
+        output_keys_conditional = set(),
+        loss_keys               = {"kl", "total"},
+        grad_modules            = ["localizer", "backbone_features", "fgbf",
                                    "compartment", "classifier"],
     ),
     "e5": ExpectedSpec(
-        active_flags            = {"use_stn", "use_dual_intensity",
-                                   "use_compartment", "use_drp"},
-        output_keys_always      = {"logits", "theta"},
+        active_flags            = {"use_stn", "use_compartment", "use_drp", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
         output_keys_conditional = set(),
         loss_keys               = {"kl", "total"},
-        grad_modules            = ["localizer", "stem", "backbone_features",
+        grad_modules            = ["localizer", "backbone_features", "fgbf",
                                    "compartment", "drp", "projector", "classifier"],
-    ),
-    "e6": ExpectedSpec(
-        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment",
-                                   "use_drp", "use_pgr"},
-        output_keys_always      = {"logits", "theta", "sim_logits"},
-        output_keys_conditional = set(),
-        loss_keys               = {"kl", "total", "proto"},
-        grad_modules            = ["localizer", "stem", "backbone_features",
-                                   "compartment", "drp", "pgr", "projector", "classifier"],
-    ),
-    "e7": ExpectedSpec(
-        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment",
-                                   "use_drp", "use_pgr", "use_rtc"},
-        output_keys_always      = {"logits", "theta", "sim_logits"},
-        output_keys_conditional = set(),
-        loss_keys               = {"kl", "total", "proto"},
-        grad_modules            = ["localizer", "stem", "backbone_features",
-                                   "compartment", "drp", "pgr", "rtc",
-                                   "projector", "classifier"],
-    ),
-    "e8": ExpectedSpec(
-        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment",
-                                   "use_drp", "use_pgr", "use_rtc", "use_aux_heads"},
-        output_keys_always      = {"logits", "theta", "sim_logits",
-                                   "h1", "h2", "h3", "h4", "h5", "h6", "h7"},
-        output_keys_conditional = set(),
-        loss_keys               = {"kl", "coral", "supcon", "jsn_med", "jsn_lat",
-                                   "osteo", "uncert", "total", "proto"},
-        grad_modules            = ["localizer", "stem", "backbone_features",
-                                   "compartment", "drp", "pgr", "rtc",
-                                   "projector", "heads"],
     ),
 }
 
@@ -179,7 +175,7 @@ def verify_experiment(exp: str, device: torch.device, verbose: bool) -> VerifyRe
     )
 
     # ── 1. Module flag check ──────────────────────────────────────────────
-    all_flags = ["use_stn", "use_dual_intensity", "use_compartment",
+    all_flags = ["use_stn", "use_dual_intensity", "use_fgbf", "use_compartment",
                  "use_drp", "use_pgr", "use_rtc", "use_aux_heads"]
     active_flags = [f for f in all_flags if getattr(cfg.model, f)]
     expected_active = sorted(spec.active_flags)
@@ -297,6 +293,7 @@ def verify_experiment(exp: str, device: torch.device, verbose: bool) -> VerifyRe
 _FLAG_SHORT = {
     "use_stn":            "STN",
     "use_dual_intensity": "DIS",
+    "use_fgbf":           "FGBF",
     "use_compartment":    "CBM",
     "use_drp":            "DRP",
     "use_pgr":            "PGR",
