@@ -222,6 +222,19 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         }
     ),
 
+    # Isolates loss_type only vs e3_fgbf (same arch, same sampler).
+    #  Next test if this underperforms: sampler_power=0.2-0.3 on top —
+    #  not yet implemented, do this only after reviewing this result.
+    "e3_fgbf_boundary": (
+        "E3 + Fine-Grained Boundary Feature Module (Boundary-Aware Loss)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": True,
+            **FGBF_FLAGS,
+            "kaggle_priority": 3,
+        }
+    ),
+
     "e2_fgbf_pim": (
         "E2 + FGBF + PIM-Lite Feature Block",
         {
@@ -240,7 +253,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "use_stn": True,
             "use_dual_intensity": False,
             **FGBF_FLAGS,
-            "kaggle_priority": 3,
+            "kaggle_priority": None,
         }
     ),
 
@@ -318,6 +331,11 @@ def get_config(
     # From e3 onward (except untuned ablations), default to class-balanced loss and sampler
     if experiment in ("e3", "e3_fgbf", "e4", "e5"):
         train_cfg.loss_type = "weighted_ce"
+        train_cfg.sampler = "none"
+        train_cfg.checkpoint_monitor = "score"
+
+    if experiment == "e3_fgbf_boundary":
+        train_cfg.loss_type = "boundary_aware"
         train_cfg.sampler = "none"
         train_cfg.checkpoint_monitor = "score"
 
