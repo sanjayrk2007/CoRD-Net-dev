@@ -1,0 +1,7 @@
+A realistic SOTA-level internal result would need approximately:
+
+QWK: ≥0.88
+Accuracy: ≥70–72%
+Macro-F1: ≥0.72
+MAE: ≤0.32–0.34
+KL1 recall: preferably ≥0.50–0.55
