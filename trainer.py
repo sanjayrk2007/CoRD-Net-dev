@@ -396,13 +396,38 @@ class Trainer:
 
     # ── Single training step ──────────────────────────────────────────────────
 
-    def _step(self, batch) -> Dict[str, float]:
-        """One forward → loss → backward → optimizer step."""
-        global_crop, labels = self._unpack_batch(batch)
-        global_crop, labels = \
-            self._to_device(global_crop, labels)
+    def _step(
+        self,
+        batch,
+        micro_step: int = 0,
+        is_last_micro: bool = True,
+    ) -> Dict[str, float]:
+        """One forward → loss → backward, with optional gradient accumulation.
 
-        self.optimizer.zero_grad(set_to_none=True)
+        Parameters
+        ----------
+        batch:
+            Raw batch from the DataLoader.
+        micro_step:
+            0-indexed position within the current accumulation window.
+            Used to decide when to call optimizer.step() / zero_grad().
+        is_last_micro:
+            True when this is the final micro-batch of the accumulation
+            window (or the final batch in an epoch) — triggers the
+            optimizer step and gradient reset.
+
+        Guardrail: when grad_accum_steps=1 (default) every call has
+        micro_step=0 and is_last_micro=True, so the path reduces to a
+        plain forward → backward → step, identical to the previous code.
+        """
+        grad_accum = max(1, getattr(self.tcfg, "grad_accum_steps", 1))
+
+        global_crop, labels = self._unpack_batch(batch)
+        global_crop, labels = self._to_device(global_crop, labels)
+
+        # Zero grads only at the start of each accumulation window.
+        if micro_step == 0:
+            self.optimizer.zero_grad(set_to_none=True)
 
         with autocast(enabled=self.tcfg.amp):
             preds   = self.model(global_crop)
@@ -415,42 +440,53 @@ class Trainer:
             pred_cls = logits.argmax(dim=1)
             correct = (pred_cls == labels["kl"]).sum().item()
             count = labels["kl"].size(0)
-        total = loss_kv["total"]
+
+        # Scale loss by accumulation factor so effective gradient magnitude
+        # stays constant regardless of grad_accum_steps.
+        total = loss_kv["total"] * (1.0 / grad_accum)
 
         if self.scaler:
             self.scaler.scale(total).backward()
-            self.scaler.unscale_(self.optimizer)
-            fgbf_grad = self._fgbf_gradient_norm()
-            bb_grad = self._backbone_gradient_norm()
-            if self.tcfg.gradient_clip > 0:
-                nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.tcfg.gradient_clip
-                )
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            if is_last_micro:
+                self.scaler.unscale_(self.optimizer)
+                fgbf_grad = self._fgbf_gradient_norm()
+                bb_grad   = self._backbone_gradient_norm()
+                if self.tcfg.gradient_clip > 0:
+                    nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.tcfg.gradient_clip
+                    )
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                fgbf_grad = 0.0
+                bb_grad   = 0.0
         else:
             total.backward()
-            fgbf_grad = self._fgbf_gradient_norm()
-            bb_grad = self._backbone_gradient_norm()
-            if self.tcfg.gradient_clip > 0:
-                nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.tcfg.gradient_clip
-                )
-            self.optimizer.step()
+            if is_last_micro:
+                fgbf_grad = self._fgbf_gradient_norm()
+                bb_grad   = self._backbone_gradient_norm()
+                if self.tcfg.gradient_clip > 0:
+                    nn.utils.clip_grad_norm_(
+                        self.model.parameters(), self.tcfg.gradient_clip
+                    )
+                self.optimizer.step()
+            else:
+                fgbf_grad = 0.0
+                bb_grad   = 0.0
 
-        # EMA prototype update AFTER backward
-        if self.cfg.model.use_pgr and hasattr(self.model, "update_prototypes"):
+        # EMA prototype update AFTER backward (only when we actually stepped)
+        if is_last_micro and self.cfg.model.use_pgr and hasattr(self.model, "update_prototypes"):
             drp_emb = getattr(self.model, "_last_drp_emb", None)
             if drp_emb is not None:
                 self.model.update_prototypes(drp_emb.detach(), labels["kl"])
+
+        # Report the *unscaled* loss values for logging consistency.
         out = {k: v.item() for k, v in loss_kv.items()}
-        out["fgbf_grad_norm"] = fgbf_grad
+        out["fgbf_grad_norm"]    = fgbf_grad
         out["backbone_grad_norm"] = bb_grad
-        out["correct"] = correct
-        out["count"] = count
-
-        out["logits_mean"] = preds["logits"].detach().mean(dim=0).cpu()
-
+        out["correct"]           = correct
+        out["count"]             = count
+        out["logits_mean"]       = preds["logits"].detach().mean(dim=0).cpu()
         return out
 
     # ── Epoch loops ───────────────────────────────────────────────────────────
@@ -470,14 +506,25 @@ class Trainer:
         logit_sum = torch.zeros(self.cfg.model.num_classes)
         num_batches = 0
 
-        for batch in loader:
-            step = self._step(batch)
+        grad_accum = max(1, getattr(self.tcfg, "grad_accum_steps", 1))
+        batches = list(loader)          # materialise so we can detect last batch
+        total_batches = len(batches)
+
+        for batch_idx, batch in enumerate(batches):
+            micro_step   = batch_idx % grad_accum
+            # Flush on (a) completing an accumulation window or (b) last batch
+            # in the epoch — so no gradient is ever silently discarded.
+            is_last_micro = (
+                (micro_step == grad_accum - 1)
+                or (batch_idx == total_batches - 1)
+            )
+            step = self._step(batch, micro_step=micro_step, is_last_micro=is_last_micro)
 
             correct += step.pop("correct")
-            count += step.pop("count")
+            count   += step.pop("count")
 
             # ADD THESE TWO LINES
-            logit_sum += step.pop("logits_mean")
+            logit_sum   += step.pop("logits_mean")
             num_batches += 1
 
             for k, v in step.items():

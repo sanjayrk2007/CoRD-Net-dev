@@ -42,6 +42,7 @@ from typing import Optional, Dict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 import torchvision.models as tv_models
 
 from config import ModelConfig
@@ -84,6 +85,7 @@ class DRPNet(nn.Module):
     def __init__(self, cfg: ModelConfig) -> None:
         super().__init__()
         self.cfg = cfg
+        self.grad_checkpoint = cfg.grad_checkpoint   # memory opt: off by default
         D  = cfg.backbone_feature_dim   # 768
         E  = cfg.embedding_dim          # 256
         Fd = cfg.fused_dim              # 512
@@ -125,6 +127,7 @@ class DRPNet(nn.Module):
                 stem              = self.stem,
                 backbone_features = self.backbone_features,
                 feature_dim       = D,
+                grad_checkpoint   = cfg.grad_checkpoint,
             )
 
         # ── E5: DRP Block ─────────────────────────────────────────────────
@@ -210,7 +213,14 @@ class DRPNet(nn.Module):
         pooled:  (B, 768)
         """
         enhanced = self.stem(x)
-        spatial  = self.backbone_features(enhanced)
+        # Gradient checkpointing: active only during training when explicitly
+        # enabled — eval() runs are byte-identical to the no-flag default.
+        if self.training and self.grad_checkpoint:
+            spatial = torch.utils.checkpoint.checkpoint(
+                self.backbone_features, enhanced, use_reentrant=False
+            )
+        else:
+            spatial = self.backbone_features(enhanced)
         pooled   = self.backbone_pool(spatial)
         return spatial, pooled
 

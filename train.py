@@ -151,6 +151,14 @@ def parse_args() -> argparse.Namespace:
         choices=["standard", "mild", "none"],
         help="Training augmentation strength"
     )
+    # ── Memory-optimization flags ─────────────────────────────────────────
+    # --num-workers already existed (line 127 above) — confirmed, not re-added.
+    p.add_argument("--grad-checkpoint", action="store_true",
+                   help="Enable gradient checkpointing on the backbone "
+                        "(reduces VRAM; active during training only)")
+    p.add_argument("--grad-accum-steps", type=int, default=None,
+                   help="Gradient accumulation micro-batches "
+                        "(default: 1 = no accumulation)")
     return p.parse_args()
 
 
@@ -195,6 +203,10 @@ def main() -> None:
         cfg.training.swa = True
     if args.swa_num_checkpoints is not None:
         cfg.training.swa_num_checkpoints = args.swa_num_checkpoints
+    if args.grad_checkpoint:
+        cfg.model.grad_checkpoint = True
+    if args.grad_accum_steps is not None:
+        cfg.training.grad_accum_steps = args.grad_accum_steps
 
     logger.info("═" * 62)
     logger.info("  CoRD-Net — %s", cfg.description)
@@ -207,6 +219,8 @@ def main() -> None:
     logger.info("  SWA         : %s", cfg.training.swa)
     logger.info("  Data root   : %s", cfg.training.data_root or "not set")
     logger.info("  Pretrained  : %s", cfg.model.pretrained)
+    logger.info("  Grad ckpt   : %s", cfg.model.grad_checkpoint)
+    logger.info("  Grad accum  : %d", cfg.training.grad_accum_steps)
     if not cfg.model.pretrained:
         logger.warning(
             "WARNING: --pretrained flag is NOT set (cfg.model.pretrained is False). "
@@ -258,6 +272,8 @@ def main() -> None:
         "batch_size": cfg.training.batch_size,
         "num_classes": cfg.model.num_classes,
         "use_aux_heads": cfg.model.use_aux_heads,
+        "grad_checkpoint": cfg.model.grad_checkpoint,
+        "grad_accum_steps": cfg.training.grad_accum_steps,
     }
 
     with open(output_dir / "experiment_config.json", "w") as f:

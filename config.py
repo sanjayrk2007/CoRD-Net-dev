@@ -91,6 +91,9 @@ class ModelConfig:
     use_rtc: bool = False
     use_aux_heads: bool = False
 
+    # Memory-optimization flags (off by default — zero behavior change)
+    grad_checkpoint: bool = False  # gradient checkpointing on backbone (train-only)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Training Configuration
@@ -125,6 +128,7 @@ class TrainingConfig:
     pin_memory: bool = True
     gradient_clip: float = 1.0
     amp: bool = False
+    grad_accum_steps: int = 1   # gradient accumulation micro-batches (1 = disabled)
 
     checkpoint_dir: str = "checkpoints"
     log_dir: str = "logs"

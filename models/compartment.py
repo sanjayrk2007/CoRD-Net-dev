@@ -16,6 +16,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 
 from models.dual_intensity import DualIntensityStem
 
@@ -97,16 +98,25 @@ class _EncoderBranch(nn.Module):
         stem: nn.Module,
         backbone_features: nn.Module,
         feature_dim: int = 768,
+        grad_checkpoint: bool = False,
     ) -> None:
         super().__init__()
-        self.stem     = stem
-        self.features = backbone_features
-        self.egrb     = EdgeGatedResidualBlock(feature_dim)
-        self.pool     = nn.AdaptiveAvgPool2d(1)
+        self.stem            = stem
+        self.features        = backbone_features
+        self.grad_checkpoint = grad_checkpoint
+        self.egrb            = EdgeGatedResidualBlock(feature_dim)
+        self.pool            = nn.AdaptiveAvgPool2d(1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """(B, 3, H, W) → (B, feature_dim)."""
-        spatial = self.features(self.stem(x))   # (B, C, H, W)
+        # Gradient checkpointing: active only during training when explicitly
+        # enabled — eval() runs are byte-identical to the no-flag default.
+        if self.training and self.grad_checkpoint:
+            spatial = torch.utils.checkpoint.checkpoint(
+                self.features, self.stem(x), use_reentrant=False
+            )
+        else:
+            spatial = self.features(self.stem(x))
         return self.pool(self.egrb(spatial)).flatten(1)
 
 
@@ -190,6 +200,7 @@ class CompartmentBranchModule(nn.Module):
         feature_dim: int = 768,
         overlap: float = 0.10,
         debug_visualization: bool = False,
+        grad_checkpoint: bool = False,
     ) -> None:
         super().__init__()
         self.overlap = overlap
@@ -197,7 +208,8 @@ class CompartmentBranchModule(nn.Module):
         self.compartment_branch = _EncoderBranch(
             stem,
             backbone_features,
-            feature_dim
+            feature_dim,
+            grad_checkpoint=grad_checkpoint,
         )
         self.fusion = CompartmentFusion(feature_dim)
 
