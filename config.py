@@ -257,6 +257,19 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         }
     ),
 
+    # One rung further down the sampler-power ladder than e3_fgbf_sampler02
+    # (sampler_power=0.2): a 0.15 power is even closer to uniform sampling,
+    # isolating a weaker class-rebalancing signal on top of weighted_ce.
+    "e3_fgbf_sampler015": (
+        "E3 + Fine-Grained Boundary Feature Module",
+        {
+            "use_stn": True,
+            "use_dual_intensity": True,
+            **FGBF_FLAGS,
+            "kaggle_priority": 4,
+        }
+    ),
+
     # Isolates loss_type only vs e3_fgbf (same arch, same sampler).
     #  Next test if this underperforms: sampler_power=0.2-0.3 on top —
     #  not yet implemented, do this only after reviewing this result.
@@ -477,6 +490,12 @@ def get_config(
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
         train_cfg.sampler_power = 0.2
+        train_cfg.checkpoint_monitor = "score"
+
+    if experiment == "e3_fgbf_sampler015":
+        train_cfg.loss_type = "weighted_ce"
+        train_cfg.sampler = "weighted"
+        train_cfg.sampler_power = 0.15
         train_cfg.checkpoint_monitor = "score"
 
     # e2_fgbf_pim_v6: tuned recipe (BoundaryAwareLoss, STN identity reg, stabilized LR and warmup)
