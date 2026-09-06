@@ -21,6 +21,14 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 
+BACKBONE_DIMS: Dict[str, int] = {
+    "convnext_tiny": 768,
+    "convnext_small": 768,
+    "convnext_base": 1024,
+    "convnext_large": 1536,
+}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Model Configuration
 # ──────────────────────────────────────────────────────────────────────────────
@@ -32,8 +40,8 @@ class ModelConfig:
     # Backbone
     backbone: str = "convnext_tiny"
     pretrained: bool = False
-    backbone_feature_dim: int = 768   # ConvNeXt-tiny pooled output
-    spatial_feature_dim: int = 768    # ConvNeXt-tiny spatial (before pool)
+    backbone_feature_dim: Optional[int] = None  # auto-filled from BACKBONE_DIMS unless overridden
+    spatial_feature_dim: Optional[int] = None   # auto-filled from BACKBONE_DIMS unless overridden
 
     # Embedding dimensions
     embedding_dim: int = 256          # DRP / PGR / RTC shared dim
@@ -140,6 +148,9 @@ class TrainingConfig:
                                            # don't save "best" if the weakest of
                                            # KL0/KL1/KL2 recall drops below this
     stn_identity_reg_weight: float = 0.0   # STN affine matrix identity regularization weight (0.0 = disabled)
+    swa: bool = False                      # Stochastic Weight Averaging over late checkpoints
+    swa_num_checkpoints: int = 5           # Average the last N saved checkpoints after warmup
+    swa_start_epoch: Optional[int] = None  # None => warmup_epochs + 1
 
     # ── Dataset paths (set via CLI; no hardcoded paths) ───────────────────
     data_root: Optional[str] = None
@@ -184,7 +195,7 @@ FGBF_FLAGS: Dict[str, any] = {
 }
 
 # Note: Intermediate ablation/debugging keys (e2m, e1_fgbf, e2_fgbf, e2_fgbf_ms,
-# e2_fgbf_sk, e2_fgbf_pim_v2-v5, e6, e7, e8) have been trimmed from the active
+# e2_fgbf_sk, e2_fgbf_pim_v2-v5) have been trimmed from the active
 # registry and are recoverable from git log history for config.py if needed.
 _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
     "e1": (
@@ -219,6 +230,17 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "use_dual_intensity": True,
             **FGBF_FLAGS,
             "kaggle_priority": 2,
+        }
+    ),
+
+    "e3_fgbf_base": (
+        "E3 + Fine-Grained Boundary Feature Module (ConvNeXt-Base)",
+        {
+            "use_stn": True,
+            "use_dual_intensity": True,
+            **FGBF_FLAGS,
+            "backbone": "convnext_base",
+            "kaggle_priority": 5,
         }
     ),
 
@@ -303,6 +325,94 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "kaggle_priority": None,
         }
     ),
+
+    # Historical e6/e7/e8 blocks from `git show cefbb2f~1:config.py`, quoted
+    # verbatim before restoration:
+    #
+    # "e6": (
+    #     "E5 + Prototype-Guided Refinement",
+    #     {
+    #         "use_stn": True,
+    #         "use_dual_intensity": False,
+    #         "use_compartment": True,
+    #         "use_drp": True,
+    #         "use_pgr": True,
+    #         **FGBF_FLAGS,
+    #     }
+    # ),
+    #
+    # "e7": (
+    #     "E6 + Relational Token Coupling",
+    #     {
+    #         "use_stn": True,
+    #         "use_dual_intensity": False,
+    #         "use_compartment": True,
+    #         "use_drp": True,
+    #         "use_pgr": True,
+    #         "use_rtc": True,
+    #         **FGBF_FLAGS,
+    #     }
+    # ),
+    #
+    # "e8": (
+    #     "E7 + Auxiliary Heads",
+    #     {
+    #         "use_stn": True,
+    #         "use_dual_intensity": False,
+    #         "use_compartment": True,
+    #         "use_drp": True,
+    #         "use_pgr": True,
+    #         "use_rtc": True,
+    #         "use_aux_heads": True,
+    #         **FGBF_FLAGS,
+    #     }
+    # ),
+    #
+    # E8 label/data dependency warning: h4/h5 auxiliary JSN heads require
+    # metadata columns `jsn_med` and `jsn_lat`; directory-only layouts default
+    # those labels to -1, so those losses are safely ignored but the heads are
+    # effectively unsupervised unless a metadata CSV/split CSV provides labels.
+    "e6": (
+        "E5 + Prototype-Guided Refinement",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_compartment": True,
+            "use_drp": True,
+            "use_pgr": True,
+            **FGBF_FLAGS,
+            "kaggle_priority": None,
+        }
+    ),
+
+    "e7": (
+        "E6 + Relational Token Coupling",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_compartment": True,
+            "use_drp": True,
+            "use_pgr": True,
+            "use_rtc": True,
+            **FGBF_FLAGS,
+            "kaggle_priority": None,
+        }
+    ),
+
+    "e8": (
+        "E7 + Auxiliary Heads",
+        {
+            "use_stn": True,
+            "use_dual_intensity": False,
+            "use_compartment": True,
+            "use_drp": True,
+            "use_pgr": True,
+            "use_rtc": True,
+            "use_aux_heads": True,
+            **FGBF_FLAGS,
+            "kaggle_priority": None,
+        }
+    ),
 }
 
 EXPERIMENT_NAMES: Dict[str, str] = {k: v[0] for k, v in _EXPERIMENT_FLAGS.items()}
@@ -341,8 +451,19 @@ def get_config(
     model_cfg = ModelConfig(pretrained=pretrained, **flags)
     train_cfg = TrainingConfig()
 
+    if model_cfg.backbone not in BACKBONE_DIMS:
+        raise ValueError(
+            f"Unknown backbone '{model_cfg.backbone}'. "
+            f"Valid choices: {list(BACKBONE_DIMS.keys())}"
+        )
+    inferred_dim = BACKBONE_DIMS[model_cfg.backbone]
+    if model_cfg.backbone_feature_dim is None:
+        model_cfg.backbone_feature_dim = inferred_dim
+    if model_cfg.spatial_feature_dim is None:
+        model_cfg.spatial_feature_dim = inferred_dim
+
     # From e3 onward (except untuned ablations), default to class-balanced loss and sampler
-    if experiment in ("e3", "e3_fgbf", "e4", "e5"):
+    if experiment in ("e3", "e3_fgbf", "e3_fgbf_base", "e4", "e5", "e6", "e7", "e8"):
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "none"
         train_cfg.checkpoint_monitor = "score"

@@ -122,11 +122,12 @@ class CompartmentFusion(nn.Module):
     Parameters
     ----------
     feat_dim:
-        Per-branch feature dimension (768).
+        Per-branch backbone feature dimension.
     """
 
     def __init__(self, feat_dim: int = 768) -> None:
         super().__init__()
+        self.feat_dim = feat_dim
         self.gate = nn.Sequential(
             nn.Linear(feat_dim * 3, 3), nn.Softmax(dim=-1)
         )
@@ -149,9 +150,10 @@ class CompartmentFusion(nn.Module):
                 "gate_medial": w[:, 1].mean().item(),
                 "gate_lateral": w[:, 2].mean().item(),
             }
-        global_feat = F.layer_norm(global_feat, (768,))
-        medial_feat = F.layer_norm(medial_feat, (768,))
-        lateral_feat = F.layer_norm(lateral_feat, (768,))
+        norm_shape = (self.feat_dim,)
+        global_feat = F.layer_norm(global_feat, norm_shape)
+        medial_feat = F.layer_norm(medial_feat, norm_shape)
+        lateral_feat = F.layer_norm(lateral_feat, norm_shape)
         fused = w[:, 0:1] * global_feat + w[:, 1:2] * medial_feat + w[:, 2:3] * lateral_feat
         return self.proj(fused)
 

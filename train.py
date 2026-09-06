@@ -126,6 +126,10 @@ def parse_args() -> argparse.Namespace:
                    help="Root directory for evaluation output (default: results)")
     p.add_argument("--num-workers",    type=int, default=None)
     p.add_argument("--amp",            action="store_true")
+    p.add_argument("--swa",            action="store_true",
+                   help="Average model weights over the last post-warmup checkpoints before final reporting")
+    p.add_argument("--swa-num-checkpoints", type=int, default=None,
+                   help="Number of late checkpoints to average when --swa is enabled")
     p.add_argument(
         "--loss-type",
         type=str,
@@ -187,6 +191,10 @@ def main() -> None:
         cfg.training.num_workers = args.num_workers
     if args.amp:
         cfg.training.amp = True
+    if args.swa:
+        cfg.training.swa = True
+    if args.swa_num_checkpoints is not None:
+        cfg.training.swa_num_checkpoints = args.swa_num_checkpoints
 
     logger.info("═" * 62)
     logger.info("  CoRD-Net — %s", cfg.description)
@@ -196,6 +204,7 @@ def main() -> None:
     logger.info("  Batch size  : %d", cfg.training.batch_size)
     logger.info("  Loss type   : %s", cfg.training.loss_type)
     logger.info("  Sampler     : %s", cfg.training.sampler)
+    logger.info("  SWA         : %s", cfg.training.swa)
     logger.info("  Data root   : %s", cfg.training.data_root or "not set")
     logger.info("  Pretrained  : %s", cfg.model.pretrained)
     if not cfg.model.pretrained:
@@ -241,6 +250,8 @@ def main() -> None:
         "seed": args.seed,
         "loss_type": cfg.training.loss_type,
         "sampler": cfg.training.sampler,
+        "swa": cfg.training.swa,
+        "swa_num_checkpoints": cfg.training.swa_num_checkpoints,
         "augmentation": args.augmentation,
         "epochs": cfg.training.epochs,
         "patience": cfg.training.patience,

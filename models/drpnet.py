@@ -43,7 +43,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as tv_models
-from torchvision.models import ConvNeXt_Tiny_Weights
 
 from config import ModelConfig
 from models.localization import KneeLocalizer
@@ -101,9 +100,10 @@ class DRPNet(nn.Module):
         else:
             self.stem = nn.Identity()
 
-        # ── Shared ConvNeXt-tiny backbone (ONE instance) ──────────────────
-        weights = ConvNeXt_Tiny_Weights.DEFAULT if cfg.pretrained else None
-        _bb = tv_models.convnext_tiny(weights=weights)
+        # ── Shared ConvNeXt backbone (ONE instance) ───────────────────────
+        backbone_factory = getattr(tv_models, cfg.backbone)
+        weights = "DEFAULT" if cfg.pretrained else None
+        _bb = backbone_factory(weights=weights)
         self.backbone_features = nn.Sequential(*list(_bb.features.children()))
         self.backbone_pool     = nn.Sequential(_bb.avgpool, nn.Flatten(1))
 

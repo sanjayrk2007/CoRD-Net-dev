@@ -140,6 +140,7 @@ class Trainer:
         self.epoch      = 0
         self.best_qwk   = -1.0
         self.best_score = -1.0
+        self._swa_checkpoint_paths: List[Path] = []
 
         # ── Per-epoch history (populated during fit) ──────────────────────
         self.history: Dict[str, List] = {
@@ -648,7 +649,7 @@ class Trainer:
         train_losses: Dict,
         val_losses:   Optional[Dict] = None,
         tag:          str = "latest",
-    ) -> None:
+    ) -> Path:
         state = {
             "experiment":           self.cfg.experiment,
             "epoch":                epoch,
@@ -662,11 +663,76 @@ class Trainer:
             "val_losses":           val_losses or {},
             "history":              self.history,
         }
-        save_checkpoint(
+        path = save_checkpoint(
             state,
             self.tcfg.checkpoint_dir,
             filename=f"{self.cfg.experiment}_{tag}.pt",
         )
+        self._maybe_track_swa_checkpoint(path, epoch)
+        return path
+
+    def _maybe_track_swa_checkpoint(self, path: Path, epoch: int) -> None:
+        """Record post-warmup checkpoint paths for optional late-SWA averaging."""
+        if not getattr(self.tcfg, "swa", False):
+            return
+        swa_start = getattr(self.tcfg, "swa_start_epoch", None)
+        if swa_start is None:
+            swa_start = max(1, getattr(self.tcfg, "warmup_epochs", 0) + 1)
+        if epoch < swa_start:
+            return
+        self._swa_checkpoint_paths = [p for p in self._swa_checkpoint_paths if p != path]
+        self._swa_checkpoint_paths.append(path)
+        keep = max(1, int(getattr(self.tcfg, "swa_num_checkpoints", 5)))
+        self._swa_checkpoint_paths = self._swa_checkpoint_paths[-keep:]
+
+    def _build_swa_checkpoint(self) -> Optional[Path]:
+        """
+        Average model weights over the last N recorded post-warmup checkpoints.
+
+        Floating tensors are arithmetic-averaged; non-floating buffers are copied
+        from the most recent checkpoint. The resulting model state is saved as
+        `<experiment>_swa.pt` and loaded into `self.model` for final reporting.
+        """
+        if not getattr(self.tcfg, "swa", False):
+            return None
+
+        paths = [p for p in self._swa_checkpoint_paths if p.exists()]
+        if not paths:
+            logger.warning("SWA requested, but no post-warmup checkpoints were recorded.")
+            return None
+
+        logger.info("Building SWA checkpoint from %d checkpoint(s): %s", len(paths), paths)
+        checkpoints = [torch.load(p, map_location="cpu") for p in paths]
+        state_dicts = [ckpt["model_state_dict"] for ckpt in checkpoints]
+        latest_state = state_dicts[-1]
+        avg_state = {}
+
+        for key, latest_value in latest_state.items():
+            if torch.is_tensor(latest_value) and latest_value.is_floating_point():
+                stacked = torch.stack([sd[key].detach().cpu().float() for sd in state_dicts], dim=0)
+                avg_state[key] = stacked.mean(dim=0).to(dtype=latest_value.dtype)
+            else:
+                avg_state[key] = latest_value
+
+        state = {
+            "experiment": self.cfg.experiment,
+            "epoch": self.epoch,
+            "model_state_dict": avg_state,
+            "source_checkpoints": [str(p) for p in paths],
+            "swa_num_checkpoints": len(paths),
+            "best_score": self.best_score,
+            "best_qwk": self.best_qwk,
+            "history": self.history,
+        }
+        swa_path = save_checkpoint(
+            state,
+            self.tcfg.checkpoint_dir,
+            filename=f"{self.cfg.experiment}_swa.pt",
+        )
+        self.model.load_state_dict(avg_state, strict=True)
+        self.model.to(self.device)
+        logger.info("Loaded SWA weights for final reporting from %s", swa_path)
+        return swa_path
 
     def resume(self, checkpoint_path: str | Path) -> None:
         """Restore model, optimizer, scheduler, epoch, and history."""
@@ -842,11 +908,14 @@ class Trainer:
 
         # Final checkpoint
         self._save(self.epoch, train_losses, tag="final")
-        
-        best_ckpt_path = Path(self.tcfg.checkpoint_dir) / f"{self.cfg.experiment}_best.pt"
-        if best_ckpt_path.exists():
-            logger.info("Restoring best model checkpoint (best_score=%.4f, val_qwk=%.4f) from %s for evaluation...", self.best_score, self.best_qwk, best_ckpt_path)
-            load_checkpoint(best_ckpt_path, self.model, device=self.device)
+
+        if getattr(self.tcfg, "swa", False):
+            self._build_swa_checkpoint()
+        else:
+            best_ckpt_path = Path(self.tcfg.checkpoint_dir) / f"{self.cfg.experiment}_best.pt"
+            if best_ckpt_path.exists():
+                logger.info("Restoring best model checkpoint (best_score=%.4f, val_qwk=%.4f) from %s for evaluation...", self.best_score, self.best_qwk, best_ckpt_path)
+                load_checkpoint(best_ckpt_path, self.model, device=self.device)
 
         logger.info("Training complete. Generating reports …")
 
