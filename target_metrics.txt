@@ -1,7 +1,83 @@
-A realistic SOTA-level internal result would need approximately:
+Recommended target metrics for CoRD-Net
+As of September 6, 2026, the most important target is not 85% accuracy. It is a validated metric package under a defensible split.
 
-QWK: ≥0.88
-Accuracy: ≥70–72%
-Macro-F1: ≥0.72
-MAE: ≤0.32–0.34
-KL1 recall: preferably ≥0.50–0.55
+Your current best FGBF result is:
+
+Accuracy: 67.57%
+Macro-F1: 0.6975
+QWK: 0.8404
+MAE: 0.3665
+KL1 recall: 41.55%
+KL1 F1: 38.26%
+1. Minimum publishable internal target
+Metric	Target
+QWK	≥0.84
+Accuracy	≥68–70%
+Macro-F1	≥0.69–0.70
+Balanced accuracy	≥0.68–0.70
+MAE	≤0.36–0.37
+KL1 recall	≥0.40
+KL1 F1	≥0.40
+Your current result is close to this level. QWK, macro-F1, balanced accuracy, and KL1 recall are near or within the minimum range, but KL1 F1 and MAE remain borderline. The weaker validation result—QWK 0.8101 and MAE 0.3947—also shows that the result is not yet stable.
+
+2. Target for a strong patient-wise SOTA claim
+First verify that no patient appears in multiple partitions. Your code checks file-path overlap, not patient overlap.
+
+If the evaluation is genuinely patient-wise, aim for:
+
+Metric	Strong target
+QWK	≥0.89
+Accuracy	≥72%
+Macro-F1	≥0.74
+MAE	≤0.31–0.32
+KL1 recall	≥0.50–0.55
+KL1 F1	≥0.45
+These targets are intended to exceed the recent patient-wise benchmark of approximately QWK 0.881, accuracy 0.703, macro-F1 0.724, and MAE 0.313 
+Alk26
+. That benchmark used explicit patient-level separation and external evaluation.
+
+3. If you retain the current 1,656-image split
+Your current 5,778/826/1,656 arrangement resembles the commonly used OAI image-level split. Under that protocol, a same-protocol metric-leading result should aim for approximately:
+
+Accuracy: ≥77%
+Macro-F1: ≥0.76–0.77
+QWK: ≥0.86–0.88
+MAE: ≤0.33
+KL1 recall: ≥0.40–0.45
+Earlier OAI work reported approximately 76.9% accuracy and 0.7665 macro-F1, but this should not be treated as equivalent to strict patient-wise performance 
+Pi23
+. Therefore, it would be safer to call such a result same-protocol SOTA, not clinically robust SOTA.
+
+4. External-validation target
+For a clinically stronger claim, aim for:
+
+Metric	External target
+QWK	≥0.82
+Balanced accuracy	≥0.68–0.70
+Macro-F1	≥0.65
+KL1 recall	≥0.35–0.40
+Extreme-grade errors	Very low or absent
+An external study reported QWK 0.820, balanced accuracy 0.693, and KL1 recall 0.372 
+Vaa25
+. Another recent framework showed internal accuracy/F1 of 0.726/0.726 falling to 0.685/0.656 externally, illustrating why external testing matters.
+
+5. Requirements beyond numerical scores
+For a defensible SOTA claim, also require:
+
+At least three random seeds, preferably five.
+Mean, standard deviation, and 95% confidence intervals.
+A locked test set that was not used for model selection.
+Patient-level overlap audit and duplicate-image audit.
+Comparison with ConvNeXt/STN baselines under the same split.
+Per-grade precision, recall, F1, and confusion matrices.
+KL1/KL2 boundary-error analysis.
+External or temporal validation.
+Calibration analysis if claiming useful uncertainty estimation.
+Also verify the loader: the shown __getitem__ returns only [global_img]; it does not visibly load medial or lateral crops. Therefore, confirm that the stated compartment-aware architecture is actually receiving those inputs.
+
+Final target
+For your project, I would set the main goal as:
+
+Patient-wise QWK ≥0.89, accuracy ≥72%, macro-F1 ≥0.74, MAE ≤0.32, KL1 recall ≥0.50, and KL1 F1 ≥0.45, reproduced across at least three seeds.
+
+Your current FGBF result is a useful starting point, but it is not yet SOTA.
