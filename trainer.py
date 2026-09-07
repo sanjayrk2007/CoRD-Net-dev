@@ -319,6 +319,44 @@ class Trainer:
 
         return total ** 0.5 if count > 0 else 0.0
 
+    def _compartment_gradient_norm(self) -> float:
+        """Gradient norm over the E4 compartment module (EGRB + fusion gate)
+        ONLY — excludes the shared backbone/stem it wraps, which already
+        has its own norm via _backbone_gradient_norm(). Added to diagnose
+        the E4/E5 mode-collapse: this tier was previously untracked, so
+        there was no way to tell from logs whether the compartment branch
+        was receiving live gradient at all or training into a degenerate
+        state.
+        """
+        compartment = getattr(self.model, "compartment", None)
+        if compartment is None:
+            return 0.0
+
+        total = 0.0
+        count = 0
+        backbone_ids = {id(p) for p in getattr(self.model, "backbone_features", nn.Module()).parameters()}
+
+        for param in compartment.parameters():
+            if param.grad is not None and id(param) not in backbone_ids:
+                total += param.grad.detach().norm().item() ** 2
+                count += 1
+
+        return total ** 0.5 if count > 0 else 0.0
+
+    def _head_gradient_norm(self) -> float:
+        """Gradient norm over the classifier/projector/aux-heads tier."""
+        total = 0.0
+        count = 0
+
+        for pname, param in self.model.named_parameters():
+            if param.grad is None:
+                continue
+            if any(h in pname for h in ["classifier", "heads", "low_grade_head", "projector"]):
+                total += param.grad.detach().norm().item() ** 2
+                count += 1
+
+        return total ** 0.5 if count > 0 else 0.0
+
     # ── Loss computation ──────────────────────────────────────────────────────
 
     def _compute_loss(
@@ -451,6 +489,8 @@ class Trainer:
                 self.scaler.unscale_(self.optimizer)
                 fgbf_grad = self._fgbf_gradient_norm()
                 bb_grad   = self._backbone_gradient_norm()
+                compartment_grad = self._compartment_gradient_norm()
+                head_grad        = self._head_gradient_norm()
                 if self.tcfg.gradient_clip > 0:
                     nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.tcfg.gradient_clip
@@ -460,11 +500,15 @@ class Trainer:
             else:
                 fgbf_grad = 0.0
                 bb_grad   = 0.0
+                compartment_grad = 0.0
+                head_grad        = 0.0
         else:
             total.backward()
             if is_last_micro:
                 fgbf_grad = self._fgbf_gradient_norm()
                 bb_grad   = self._backbone_gradient_norm()
+                compartment_grad = self._compartment_gradient_norm()
+                head_grad        = self._head_gradient_norm()
                 if self.tcfg.gradient_clip > 0:
                     nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.tcfg.gradient_clip
@@ -473,6 +517,8 @@ class Trainer:
             else:
                 fgbf_grad = 0.0
                 bb_grad   = 0.0
+                compartment_grad = 0.0
+                head_grad        = 0.0
 
         # EMA prototype update AFTER backward (only when we actually stepped)
         if is_last_micro and self.cfg.model.use_pgr and hasattr(self.model, "update_prototypes"):
@@ -482,8 +528,10 @@ class Trainer:
 
         # Report the *unscaled* loss values for logging consistency.
         out = {k: v.item() for k, v in loss_kv.items()}
-        out["fgbf_grad_norm"]    = fgbf_grad
-        out["backbone_grad_norm"] = bb_grad
+        out["fgbf_grad_norm"]        = fgbf_grad
+        out["backbone_grad_norm"]    = bb_grad
+        out["compartment_grad_norm"] = compartment_grad
+        out["head_grad_norm"]        = head_grad
         out["correct"]           = correct
         out["count"]             = count
         out["logits_mean"]       = preds["logits"].detach().mean(dim=0).cpu()
@@ -502,7 +550,6 @@ class Trainer:
         correct = 0
         count = 0
 
-        # ADD HERE
         logit_sum = torch.zeros(self.cfg.model.num_classes)
         num_batches = 0
 
@@ -523,7 +570,6 @@ class Trainer:
             correct += step.pop("correct")
             count   += step.pop("count")
 
-            # ADD THESE TWO LINES
             logit_sum   += step.pop("logits_mean")
             num_batches += 1
 
@@ -575,7 +621,7 @@ class Trainer:
 
             preds = self.model(global_crop)
 
-            logits = preds["logits"]          # <-- ADD THIS
+            logits = preds["logits"]
 
             losses = self._compute_loss(preds, labels)
 

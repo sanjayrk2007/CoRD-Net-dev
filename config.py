@@ -435,6 +435,21 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
 EXPERIMENT_NAMES: Dict[str, str] = {k: v[0] for k, v in _EXPERIMENT_FLAGS.items()}
 
 
+def is_heavy_experiment(experiment: str) -> bool:
+    """True if *experiment* needs >1 crop forward (use_compartment=True) or
+    a backbone larger than convnext_tiny — i.e. it needs CPU-safe resolution
+    reduction in smoke tests / stub runs.
+
+    Public wrapper around _EXPERIMENT_FLAGS so callers outside this module
+    (e.g. run_experiment.py) don't reach into the private registry directly
+    and can't silently go stale the way the old hardcoded {"e4", "e5"} set did.
+    """
+    if experiment not in _EXPERIMENT_FLAGS:
+        raise ValueError(f"Unknown experiment '{experiment}'.")
+    _, flags = _EXPERIMENT_FLAGS[experiment]
+    return bool(flags.get("use_compartment")) or flags.get("backbone", "convnext_tiny") != "convnext_tiny"
+
+
 @dataclass
 class Config:
     """Top-level config bundling model + training settings."""

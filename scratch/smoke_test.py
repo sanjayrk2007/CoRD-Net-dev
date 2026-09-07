@@ -2,7 +2,7 @@
 scratch/smoke_test.py
 ====================
 Smoke test verifying:
-1. e2_fgbf_pim_v2 shape compatibility with active fusion path (fgbf_fuse_main=True).
+1. e3_fgbf_sampler02 shape compatibility with active fusion path (fgbf_fuse_main=True).
 2. Per-epoch logs including kl1_recall / kl1_f1 and composite val/score.
 3. Checkpoint saving triggering on composite score.
 4. LR warmup ramping over warmup_epochs.
@@ -53,9 +53,14 @@ class MockDataset(Dataset):
 
 def run_smoke_test():
     print("\n" + "=" * 60)
-    print("STEP 1: Test e2_fgbf_pim_v2 configuration and forward pass")
+    print("STEP 1: Test e3_fgbf_sampler02 configuration and forward pass")
     print("=" * 60)
-    cfg = get_config("e2_fgbf_pim_v2", device="cpu")
+    # NOTE: e2_fgbf_pim_v2 was trimmed from the active registry in config.py
+    # (see the "Intermediate ablation/debugging keys ... trimmed" comment).
+    # e3_fgbf_sampler02 is the closest live equivalent — same fgbf_fuse_main=True
+    # fusion path, and it's also your current best verified result, so this
+    # smoke test now exercises a config that actually matters.
+    cfg = get_config("e3_fgbf_sampler02", device="cpu")
     cfg.training.epochs = 6
     cfg.training.warmup_epochs = 4
     cfg.training.batch_size = 4

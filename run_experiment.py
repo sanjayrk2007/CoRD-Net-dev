@@ -23,7 +23,7 @@ import sys
 import torch
 import torch.nn as nn
 
-from config import get_config, EXPERIMENT_NAMES
+from config import get_config, EXPERIMENT_NAMES, is_heavy_experiment
 from losses import MultiTaskLoss
 from models.drpnet import DRPNet
 from trainer import Trainer
@@ -31,9 +31,15 @@ from utils import get_device, seed_everything, setup_logging
 
 logger = logging.getLogger(__name__)
 
-# Experiments that need >1 crop forward (E4+): DRPNet handles this internally,
-# but the stub uses 112 px to stay within CPU memory limits.
-_HEAVY_EXPS = {"e4", "e5"}
+# Experiments that need >1 crop forward (E4+, i.e. use_compartment=True) or a
+# larger backbone (e.g. convnext_base): DRPNet handles this internally, but
+# the stub uses 112 px on CPU to stay within memory limits.
+#
+# Derived live from config.py via is_heavy_experiment() instead of a
+# hardcoded {"e4", "e5"} set — that set silently went stale when e6/e7/e8
+# were restored and e3_fgbf_base was added (none of the three were CPU-safe
+# at 224px either, but none were in the set).
+_HEAVY_EXPS = {name for name in EXPERIMENT_NAMES if is_heavy_experiment(name)}
 
 
 def run_one(exp: str, args: argparse.Namespace) -> None:

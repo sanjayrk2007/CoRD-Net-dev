@@ -302,10 +302,10 @@ class DRPNet(nn.Module):
                     out["_fgbf_lateral_attention"] = lateral_attn.detach()
 
         # ── E4: Compartment Branches ──────────────────────────────────────
+        m_feat: Optional[torch.Tensor] = None
+        l_feat: Optional[torch.Tensor] = None
         if self.compartment is not None:
             g_feat = global_pooled
-            m_feat: Optional[torch.Tensor] = None
-            l_feat: Optional[torch.Tensor] = None
             if want_debug_crops:
                 medial_crop, lateral_crop = self.compartment._split_compartments(global_crop)
                 out["_debug_medial_crop"] = medial_crop.detach()
@@ -365,19 +365,5 @@ class DRPNet(nn.Module):
         else:
             assert self.classifier is not None
             out["logits"] = self.classifier(feat)
-            if self.training and not hasattr(self, "_feat_debug"):
-                self._feat_debug = True
-
-                print("Feature mean :", feat.mean().item())
-                print("Feature std  :", feat.std().item())
-                print("Feature norm :", feat.norm(dim=1).mean().item())
-
-                print("Classifier weight mean:",
-                    self.classifier.weight.mean().item())
-                print("Classifier weight std :",
-                    self.classifier.weight.std().item())
-
-                print("Classifier bias:",
-                    self.classifier.bias.detach().cpu())
 
         return out
