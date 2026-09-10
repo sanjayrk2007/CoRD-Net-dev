@@ -152,6 +152,14 @@ class TrainingConfig:
                                            # don't save "best" if the weakest of
                                            # KL0/KL1/KL2 recall drops below this
     stn_identity_reg_weight: float = 0.0   # STN affine matrix identity regularization weight (0.0 = disabled)
+    # LR multiplier (on top of the base "module" 1.0x group) applied to params
+    # belonging to freshly-added heavy branches (compartment/DRP/PGR/RTC —
+    # matched by name substring in trainer._build_optimizer). 1.0 = no change
+    # from prior behavior. Added because e4/e5 showed real optimization
+    # difficulty (train_acc regressed, not just val/test) traceable to these
+    # branches sharing the same LR as much lighter existing modules (STN,
+    # FGBF) with no gentler ramp-in, unlike the tuned e2_fgbf_pim_v6 recipe.
+    new_branch_lr_scale: float = 1.0
     swa: bool = False                      # Stochastic Weight Averaging over late checkpoints
     swa_num_checkpoints: int = 5           # Average the last N saved checkpoints after warmup
     swa_start_epoch: Optional[int] = None  # None => warmup_epochs + 1
@@ -217,6 +225,15 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
             "kaggle_priority": None,
         }
     ),
+    # NOTE (post-hoc training-recipe override, applied below in the
+    # kwargs-patch loop after this dict is built): plain e2 regressed on
+    # every metric including val (test_qwk 0.826 vs e1's 0.840, val_qwk
+    # 0.773 vs e1's 0.830) with KneeLocalizer's stn_identity_reg_weight
+    # left at its 0.0 default and the base LR/warmup unchanged from e1.
+    # e2_fgbf_pim_v6 already demonstrates the fix for this exact STN
+    # instability (stn_identity_reg_weight=0.015, lr=5e-5, warmup=8) but
+    # that recipe was never applied to plain e2. See the override applied
+    # to train_cfg below, mirroring the e2_fgbf_pim_v6 block.
 
     "e3": (
         "E2 + Dual-Intensity Stem",
@@ -321,10 +338,10 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
     ),
 
     "e4": (
-        "E2 + Compartment Branches",
+        "e3_fgbf_sampler02 + Compartment Branches",
         {
             "use_stn": True,
-            "use_dual_intensity": False,
+            "use_dual_intensity": True,
             "use_compartment": True,
             **FGBF_FLAGS,
             "kaggle_priority": None,
@@ -335,7 +352,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         "E4 + DRP Block",
         {
             "use_stn": True,
-            "use_dual_intensity": False,
+            "use_dual_intensity": True,
             "use_compartment": True,
             "use_drp": True,
             **FGBF_FLAGS,
@@ -511,6 +528,15 @@ def get_config(
         train_cfg.sampler_power = 0.2
         train_cfg.checkpoint_monitor = "score"
 
+    # e4/e5 now build cumulatively on e3_fgbf_sampler02 (not plain e2) per
+    # the revised ladder — carry its exact recipe forward (sampler="weighted",
+    # sampler_power=0.2) instead of the generic sampler="none" every other
+    # e3+ experiment gets above. loss_type/checkpoint_monitor are already
+    # correct from that block; only the sampler settings need overriding.
+    if experiment in ("e4", "e5"):
+        train_cfg.sampler = "weighted"
+        train_cfg.sampler_power = 0.2
+
     if experiment == "e3_fgbf_sampler015":
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
@@ -525,6 +551,26 @@ def get_config(
         train_cfg.stn_identity_reg_weight = 0.015
         train_cfg.learning_rate = 5e-5
         train_cfg.warmup_epochs = 8
+
+    # Fix for e2's regression across every metric (see note on the "e2" entry
+    # above): apply the same STN-stabilization recipe e2_fgbf_pim_v6 already
+    # uses. Not using boundary_aware loss here since plain e2 has no FGBF
+    # block to pair it with — only the STN-specific terms are ported over.
+    if experiment == "e2":
+        train_cfg.stn_identity_reg_weight = 0.015
+        train_cfg.learning_rate = 5e-5
+        train_cfg.warmup_epochs = 8
+
+    # Fix for e4/e5's train_acc regression (0.76->0.60, i.e. optimization
+    # difficulty, not helpful regularization — see EdgeGatedResidualBlock /
+    # CompartmentFusion / DRPBlock init changes in models/compartment.py and
+    # models/roi.py). Those init changes make the new branches start
+    # near-identity/near-zero-contribution; new_branch_lr_scale slows their
+    # ramp-in further, and the longer warmup gives the rest of the network
+    # time to stabilize around them before they're weighted heavily.
+    if experiment in ("e4", "e5"):
+        train_cfg.new_branch_lr_scale = 0.3
+        train_cfg.warmup_epochs = 10
 
     if device is not None:
         train_cfg.device = device

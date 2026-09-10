@@ -124,6 +124,20 @@ class DRPBlock(nn.Module):
         )
         self.last_mask: torch.Tensor | None = None
 
+        # DRP's output is concatenated (not gated) into the classifier's
+        # input in drpnet.py — cat[global, fgbf, compartment, drp, rtc]. E5
+        # (E4 + DRP) regressed far more than E4 alone (test_qwk 0.574 vs
+        # E4's 0.823), consistent with a second freshly-initialized,
+        # ungated block stacking noise on top of E4's already-fragile
+        # compartment output. Zero-initing the final Linear here makes
+        # proj's output a constant zero vector at step 0 (LayerNorm of a
+        # constant is itself constant; GELU(0)=0) — the corresponding
+        # classifier input dims start truly inert instead of injecting an
+        # arbitrary random embedding, and only pick up signal as both this
+        # block and the classifier's weights for those dims are trained.
+        nn.init.zeros_(self.proj[0].weight)
+        nn.init.zeros_(self.proj[0].bias)
+
     def forward(self, feature_map: torch.Tensor) -> torch.Tensor:
         """
         Parameters

@@ -59,6 +59,14 @@ class EdgeGatedResidualBlock(nn.Module):
                 name, torch.tensor(k, dtype=torch.float32).view(1, 1, 3, 3)
             )
 
+        # Identity-preserving init (mirrors KneeLocalizer's explicit
+        # identity init in models/localization.py, which this block lacked).
+        # Zero-initing pw_conv makes main=0 at step 0, so
+        # forward() = main*gate + x == x regardless of the gate's value —
+        # EGRB starts as a true identity function instead of injecting
+        # untrained conv noise into medial/lateral features from epoch 1.
+        nn.init.zeros_(self.pw_conv.weight)
+
     def _sobel_gate(self, x: torch.Tensor) -> torch.Tensor:
         """Mean Sobel response across channels → (B, 4, H, W)."""
         g = x.mean(dim=1, keepdim=True)
@@ -144,6 +152,20 @@ class CompartmentFusion(nn.Module):
         self.proj = nn.Sequential(
             nn.Linear(feat_dim, feat_dim), nn.LayerNorm(feat_dim), nn.GELU()
         )
+
+        # Bias the gate toward "mostly global" at init instead of the
+        # ~uniform (1/3, 1/3, 1/3) softmax a zero-init linear produces.
+        # Medial/lateral start as EGRB-identity passthroughs of raw backbone
+        # features (see EdgeGatedResidualBlock's init above), but the fused
+        # *combination* was still ~2/3 medial+lateral vs 1/3 global at step
+        # 0 — a large, sudden departure from E1's known-good global-only
+        # representation for the classifier to absorb before any of the new
+        # branches have learned anything useful. Softmax([3,0,0]) ≈
+        # (0.85, 0.07, 0.07): close to E1's behavior initially, with the
+        # branches' influence growing only as the gate is trained.
+        nn.init.zeros_(self.gate[0].weight)
+        with torch.no_grad():
+            self.gate[0].bias.copy_(torch.tensor([3.0, 0.0, 0.0]))
 
     def forward(
         self,

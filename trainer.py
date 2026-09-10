@@ -171,7 +171,10 @@ class Trainer:
 
         backbone_params = []
         module_params = []
+        new_branch_params = []  # compartment/DRP/PGR/RTC — see new_branch_lr_scale
         head_params = []
+
+        new_branch_markers = ("compartment", "fusion", "drp", "roi_mask", "reweight", "pgr", "rtc")
 
         for pname, param in self.model.named_parameters():
             if not param.requires_grad:
@@ -180,21 +183,27 @@ class Trainer:
                 backbone_params.append(param)
             elif any(h in pname for h in ["classifier", "heads", "low_grade_head", "projector"]):
                 head_params.append(param)
+            elif any(m in pname for m in new_branch_markers):
+                new_branch_params.append(param)
             else:
                 module_params.append(param)
 
+        branch_scale = getattr(self.tcfg, "new_branch_lr_scale", 1.0)
+
         if name == "adamw":
             param_groups = [
-                {"params": backbone_params, "lr": base_lr * 0.2, "weight_decay": 1e-2},
-                {"params": module_params,   "lr": base_lr * 1.0, "weight_decay": self.tcfg.weight_decay},
-                {"params": head_params,     "lr": base_lr * 2.5, "weight_decay": self.tcfg.weight_decay},
+                {"params": backbone_params,    "lr": base_lr * 0.2, "weight_decay": 1e-2},
+                {"params": module_params,      "lr": base_lr * 1.0, "weight_decay": self.tcfg.weight_decay},
+                {"params": new_branch_params,  "lr": base_lr * branch_scale, "weight_decay": self.tcfg.weight_decay},
+                {"params": head_params,        "lr": base_lr * 2.5, "weight_decay": self.tcfg.weight_decay},
             ]
             return torch.optim.AdamW(param_groups)
         if name == "adam":
             param_groups = [
-                {"params": backbone_params, "lr": base_lr * 0.2},
-                {"params": module_params,   "lr": base_lr * 1.0},
-                {"params": head_params,     "lr": base_lr * 2.5},
+                {"params": backbone_params,    "lr": base_lr * 0.2},
+                {"params": module_params,      "lr": base_lr * 1.0},
+                {"params": new_branch_params,  "lr": base_lr * branch_scale},
+                {"params": head_params,        "lr": base_lr * 2.5},
             ]
             return torch.optim.Adam(param_groups)
         raise ValueError(
