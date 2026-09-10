@@ -106,19 +106,21 @@ _SPECS: Dict[str, ExpectedSpec] = {
         grad_modules            = ["localizer", "backbone_features", "classifier"],
     ),
     "e4": ExpectedSpec(
-        active_flags            = {"use_stn", "use_compartment", "use_fgbf"},
+        # e4 now builds on e3_fgbf_sampler02 (dual-intensity stem + FGBF),
+        # not plain e2 — use_dual_intensity added per the ladder restructure.
+        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment", "use_fgbf"},
         output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
         output_keys_conditional = set(),
         loss_keys               = {"kl", "total"},
-        grad_modules            = ["localizer", "backbone_features", "fgbf",
+        grad_modules            = ["localizer", "stem", "backbone_features", "fgbf",
                                    "compartment", "classifier"],
     ),
     "e5": ExpectedSpec(
-        active_flags            = {"use_stn", "use_compartment", "use_drp", "use_fgbf"},
+        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment", "use_drp", "use_fgbf"},
         output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature"},
         output_keys_conditional = set(),
         loss_keys               = {"kl", "total"},
-        grad_modules            = ["localizer", "backbone_features", "fgbf",
+        grad_modules            = ["localizer", "stem", "backbone_features", "fgbf",
                                    "compartment", "drp", "projector", "classifier"],
     ),
 }
