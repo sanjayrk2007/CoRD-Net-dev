@@ -174,7 +174,7 @@ class Trainer:
         new_branch_params = []  # compartment/DRP/PGR/RTC — see new_branch_lr_scale
         head_params = []
 
-        new_branch_markers = ("compartment", "fusion", "drp", "roi_mask", "reweight", "pgr", "rtc")
+        new_branch_markers = ("compartment", "drp", "roi_mask", "reweight", "pgr", "rtc")
 
         for pname, param in self.model.named_parameters():
             if not param.requires_grad:
