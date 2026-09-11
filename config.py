@@ -410,7 +410,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         "E5 + Prototype-Guided Refinement",
         {
             "use_stn": True,
-            "use_dual_intensity": False,
+            "use_dual_intensity": True,
             "use_compartment": True,
             "use_drp": True,
             "use_pgr": True,
@@ -423,7 +423,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         "E6 + Relational Token Coupling",
         {
             "use_stn": True,
-            "use_dual_intensity": False,
+            "use_dual_intensity": True,
             "use_compartment": True,
             "use_drp": True,
             "use_pgr": True,
@@ -437,7 +437,7 @@ _EXPERIMENT_FLAGS: Dict[str, Tuple[str, Dict[str, any]]] = {
         "E7 + Auxiliary Heads",
         {
             "use_stn": True,
-            "use_dual_intensity": False,
+            "use_dual_intensity": True,
             "use_compartment": True,
             "use_drp": True,
             "use_pgr": True,
@@ -537,6 +537,13 @@ def get_config(
         train_cfg.sampler = "weighted"
         train_cfg.sampler_power = 0.2
 
+    # e6/e7/e8 are cumulative on e5 (now dual-intensity-enabled) — same
+    # reasoning as the e4/e5 override above, carried forward one more step
+    # each time rather than reset to the generic e3+ default.
+    if experiment in ("e6", "e7", "e8"):
+        train_cfg.sampler = "weighted"
+        train_cfg.sampler_power = 0.2
+
     if experiment == "e3_fgbf_sampler015":
         train_cfg.loss_type = "weighted_ce"
         train_cfg.sampler = "weighted"
@@ -569,6 +576,14 @@ def get_config(
     # ramp-in further, and the longer warmup gives the rest of the network
     # time to stabilize around them before they're weighted heavily.
     if experiment in ("e4", "e5"):
+        train_cfg.new_branch_lr_scale = 0.3
+        train_cfg.warmup_epochs = 10
+
+    # e6/e7/e8 add PGR/RTC on top — both now identity-init'd (see
+    # models/pgr.py, models/rtc.py), same rationale as e4/e5: slow the
+    # ramp-in of these newly-added, still-unvalidated blocks so the rest
+    # of the network isn't destabilized before they've learned anything.
+    if experiment in ("e6", "e7", "e8"):
         train_cfg.new_branch_lr_scale = 0.3
         train_cfg.warmup_epochs = 10
 

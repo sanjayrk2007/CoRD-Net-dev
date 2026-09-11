@@ -123,6 +123,43 @@ _SPECS: Dict[str, ExpectedSpec] = {
         grad_modules            = ["localizer", "stem", "backbone_features", "fgbf",
                                    "compartment", "drp", "projector", "classifier"],
     ),
+    # e6/e7/e8 were entirely absent from this table before (not stale, just
+    # never added) — running `verify_ablations.py --exp e6/e7/e8` raised an
+    # unhandled KeyError, same class of gap as the still-unfixed
+    # "e3_fgbf_base" entry below this comment used to have. Added to match
+    # the current config.py definitions (all now dual-intensity-enabled,
+    # cumulative on the fixed e5).
+    "e6": ExpectedSpec(
+        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment",
+                                    "use_drp", "use_pgr", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature", "sim_logits"},
+        output_keys_conditional = set(),
+        loss_keys               = {"kl", "total"},
+        grad_modules            = ["localizer", "stem", "backbone_features", "fgbf",
+                                   "compartment", "drp", "pgr", "projector", "classifier"],
+    ),
+    "e7": ExpectedSpec(
+        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment",
+                                    "use_drp", "use_pgr", "use_rtc", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature", "sim_logits"},
+        output_keys_conditional = set(),
+        loss_keys               = {"kl", "total"},
+        grad_modules            = ["localizer", "stem", "backbone_features", "fgbf",
+                                   "compartment", "drp", "pgr", "rtc", "projector", "classifier"],
+    ),
+    "e8": ExpectedSpec(
+        active_flags            = {"use_stn", "use_dual_intensity", "use_compartment",
+                                    "use_drp", "use_pgr", "use_rtc", "use_aux_heads", "use_fgbf"},
+        output_keys_always      = {"logits", "theta", "fgbf_logits", "fgbf_feature", "sim_logits",
+                                   "h1", "h2", "h3", "h4", "h5", "h6", "h7"},
+        output_keys_conditional = set(),
+        loss_keys               = {"kl", "total"},
+        grad_modules            = ["localizer", "stem", "backbone_features", "fgbf",
+                                   "compartment", "drp", "pgr", "rtc", "projector"],
+    ),
+    # NOTE: "e3_fgbf_base" is still missing from this table (pre-existing gap,
+    # unrelated to the ladder restructure) — `verify_ablations.py --exp
+    # e3_fgbf_base` will still raise KeyError until that's added separately.
 }
 
 

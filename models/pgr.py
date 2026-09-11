@@ -176,6 +176,22 @@ class PrototypeRefinementModule(nn.Module):
         self.norm2     = nn.LayerNorm(embed_dim)
         self.last_attn: torch.Tensor | None = None
 
+        # Identity-preserving init — same fix applied to EGRB (compartment.py)
+        # and DRPBlock (roi.py) for the same reason: a fresh cross-attention
+        # over RANDOM, untrained prototypes (GradePrototypeBank starts from
+        # torch.randn) would otherwise perturb the embedding with pure noise
+        # from step 0, through two residual additions (attn_out, then ffn).
+        # Zero-initing MultiheadAttention's internal out_proj makes
+        # attn_out == 0 regardless of the (meaningless, untrained) attention
+        # weights; zero-initing the FFN's second Linear makes ffn(refined)
+        # == 0 too. Net effect: PrototypeRefinementModule starts as an exact
+        # identity function and only refines the embedding as the prototype
+        # bank and this block's own weights become meaningful through training.
+        nn.init.zeros_(self.cross_attn.out_proj.weight)
+        nn.init.zeros_(self.cross_attn.out_proj.bias)
+        nn.init.zeros_(self.ffn[-1].weight)
+        nn.init.zeros_(self.ffn[-1].bias)
+
     def forward(
         self, embedding: torch.Tensor, prototypes: torch.Tensor
     ) -> torch.Tensor:

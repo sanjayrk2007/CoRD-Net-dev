@@ -73,6 +73,18 @@ class RelationalTokenCoupling(nn.Module):
 
         self.last_attn_weights: torch.Tensor | None = None
 
+        # Same identity-preserving fix as EGRB/DRPBlock/PGR: rtc_emb is
+        # concatenated as a brand-new slot into the classifier's input
+        # (drpnet.py's `parts.append(rtc_emb)`), not blended or gated. Left
+        # at default init, self.mha's attention over freshly-projected,
+        # untrained tokens plus a freshly-initialized out_proj would inject
+        # noise into the classifier from step 0 — exactly the mechanism that
+        # caused E4's original train_acc regression before that was fixed.
+        # Zero-initing out_proj makes RTC start as a zero vector (a true
+        # no-op slot in the concatenation) instead of an arbitrary embedding.
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
+
     def forward(
         self,
         medial_feat: torch.Tensor,
