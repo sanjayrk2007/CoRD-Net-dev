@@ -27,7 +27,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 from collections import defaultdict
 
@@ -135,7 +135,15 @@ class Trainer:
 
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
-        self.scaler    = GradScaler() if self.tcfg.amp else None
+
+        self.amp_dtype = None
+        if self.tcfg.amp:
+            if self.device.type == "cuda":
+                self.amp_dtype = torch.bfloat16 if torch.cuda.get_device_capability(self.device)[0] >= 8 else torch.float16
+            else:
+                self.amp_dtype = torch.bfloat16
+
+        self.scaler = GradScaler(self.device.type) if self.amp_dtype == torch.float16 else None
 
         self.epoch      = 0
         self.best_qwk   = -1.0
@@ -476,7 +484,7 @@ class Trainer:
         if micro_step == 0:
             self.optimizer.zero_grad(set_to_none=True)
 
-        with autocast(enabled=self.tcfg.amp):
+        with autocast(self.device.type, dtype=self.amp_dtype, enabled=self.tcfg.amp):
             preds   = self.model(global_crop)
             # ---------- DEBUG COLLECTION ----------
             if hasattr(self.model, "debug_stats"):
