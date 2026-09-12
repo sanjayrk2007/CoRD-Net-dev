@@ -457,11 +457,36 @@ def update_ablation_summary(
         with open(summary_path, newline="") as fh:
             existing = list(csv.DictReader(fh))
 
-    # Replace row if experiment already present, else append
+    # Replace row if experiment already present, else append.
+    #
+    # MERGE, don't overwrite wholesale: a standalone `evaluate.py` run always
+    # calls this with train_metrics={} and no checkpoint_monitor/sampler_power/
+    # learning_rate/warmup_epochs (those parameters don't even exist on its
+    # call path), so every field defaults to its "unset" sentinel (nan / "" /
+    # -1). Previously, updating an existing row with `existing[i] = row`
+    # blindly replaced the whole row — silently erasing train_accuracy and
+    # the training-recipe metadata that trainer.py's own end-of-run call had
+    # already written correctly. Now: a field only overwrites the existing
+    # row's value if it's not the unset sentinel; otherwise the previous
+    # value (from a real `train.py` run) is preserved.
+    def _is_unset(key: str, value) -> bool:
+        if key == "checkpoint_monitor":
+            return value == ""
+        if key == "warmup_epochs":
+            return value == -1
+        try:
+            return bool(np.isnan(value))
+        except (TypeError, ValueError):
+            return False
+
     updated = False
     for i, r in enumerate(existing):
         if r.get("experiment") == experiment:
-            existing[i] = row
+            merged = dict(r)
+            for key, value in row.items():
+                if key in ("experiment", "parameters") or not _is_unset(key, value):
+                    merged[key] = value
+            existing[i] = merged
             updated = True
             break
     if not updated:

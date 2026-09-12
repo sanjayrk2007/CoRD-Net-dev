@@ -568,6 +568,17 @@ def get_config(
         train_cfg.learning_rate = 5e-5
         train_cfg.warmup_epochs = 8
 
+    # e2_fgbf_pim never received this fix (only e2 and e2_fgbf_pim_v6 did),
+    # despite also having an unregularized STN — meaning it was previously
+    # being compared against v6 on unequal footing (broken STN vs fixed
+    # STN). Applying the same recipe here doesn't change the E2-slot
+    # decision (plain e2 already won on real completed runs), but leaves
+    # the comparison fair if e2_fgbf_pim is revisited later.
+    if experiment == "e2_fgbf_pim":
+        train_cfg.stn_identity_reg_weight = 0.015
+        train_cfg.learning_rate = 5e-5
+        train_cfg.warmup_epochs = 8
+
     # Fix for e4/e5's train_acc regression (0.76->0.60, i.e. optimization
     # difficulty, not helpful regularization — see EdgeGatedResidualBlock /
     # CompartmentFusion / DRPBlock init changes in models/compartment.py and
